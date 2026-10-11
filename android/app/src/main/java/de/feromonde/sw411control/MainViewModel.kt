@@ -200,26 +200,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 api.updateController()
                 _ui.update { it.copy(message = "Обновление SW411 Control запущено…") }
                 streamJob?.cancel()
-                repeat(30) {
-                    delay(1000)
+
+                repeat(150) {
+                    delay(1200)
                     try {
-                        val state = api.status()
-                        _ui.update {
-                            it.copy(
-                                busy = false,
-                                status = state,
-                                message = "SW411 Control обновлён"
-                            )
+                        when (val update = api.updateStatus()) {
+                            is UpdateStatus -> when (update.state) {
+                                "success" -> {
+                                    val state = runCatching { api.status() }.getOrDefault(_ui.value.status)
+                                    _ui.update {
+                                        it.copy(
+                                            busy = false,
+                                            status = state,
+                                            message = update.targetVersion?.let { v ->
+                                                "SW411 Control v$v установлен"
+                                            } ?: "SW411 Control обновлён"
+                                        )
+                                    }
+                                    reconnect()
+                                    return@launch
+                                }
+                                "failed" -> {
+                                    _ui.update {
+                                        it.copy(
+                                            busy = false,
+                                            error = update.error ?: "Обновление завершилось ошибкой"
+                                        )
+                                    }
+                                    reconnect()
+                                    return@launch
+                                }
+                            }
                         }
-                        reconnect()
-                        return@launch
                     } catch (_: Exception) {
+                        // Expected while the server is being restarted.
                     }
                 }
+
                 _ui.update {
                     it.copy(
                         busy = false,
-                        message = "Обновление ещё выполняется. Подключение восстановится автоматически."
+                        error = "Обновление не завершилось за 3 минуты"
                     )
                 }
                 reconnect()
