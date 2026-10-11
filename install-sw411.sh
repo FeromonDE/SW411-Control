@@ -691,7 +691,7 @@ function esc(s){
   return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
 }
 
-$(".input-btn").forEach(btn=>btn.addEventListener("click",async()=>{
+$$(".input-btn").forEach(btn=>btn.addEventListener("click",async()=>{
   if(busy)return;
   const n=Number(btn.dataset.input);
 
