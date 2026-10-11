@@ -123,7 +123,7 @@ jobs:
         run: |
           mkdir -p native-ui-checks
           if adb get-state >/dev/null 2>&1; then
-            adb pull /sdcard/Android/data/de.feromonde.sw411control/files/screenshots native-ui-checks/ || true
+            adb pull /sdcard/Pictures/SW411-native-ui native-ui-checks/screenshots || true
           fi
           if [ -d android/app/build/reports ]; then
             cp -R android/app/build/reports native-ui-checks/reports
