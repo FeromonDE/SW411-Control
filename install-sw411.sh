@@ -1166,7 +1166,7 @@ cat > /opt/sw411/templates/index.html.new <<'HTML'
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.8 1.8 0 0 0 .36 2l.06.06-2.12 2.12-.06-.06a1.8 1.8 0 0 0-2-.36 1.8 1.8 0 0 0-1.1 1.65V20.5h-3v-.09A1.8 1.8 0 0 0 10.4 18.8a1.8 1.8 0 0 0-2 .36l-.06.06-2.12-2.12.06-.06a1.8 1.8 0 0 0 .36-2A1.8 1.8 0 0 0 5 13.9H4.9v-3H5A1.8 1.8 0 0 0 6.6 9.8a1.8 1.8 0 0 0-.36-2l-.06-.06 2.12-2.12.06.06a1.8 1.8 0 0 0 2 .36A1.8 1.8 0 0 0 11.5 4.4V4.3h3v.1a1.8 1.8 0 0 0 1.1 1.64 1.8 1.8 0 0 0 2-.36l.06-.06 2.12 2.12-.06.06a1.8 1.8 0 0 0-.36 2A1.8 1.8 0 0 0 21 10.9h.1v3H21A1.8 1.8 0 0 0 19.4 15Z"/></svg>
           <span><strong>Настройки</strong><small>Имена входов, MQTT, Home Assistant</small></span>
         </button>
-        <button class="menu-action" id="installPwaBtn" style="display:none">
+        <button class="menu-action" id="installPwaBtn">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>
           <span><strong>Установить приложение</strong><small>Добавить SW411 Control на главный экран</small></span>
         </button>
@@ -1759,11 +1759,13 @@ window.addEventListener("beforeinstallprompt",e=>{
 
 $("#installPwaBtn").addEventListener("click",async()=>{
   $("#moreMenu").classList.remove("open");
-  if(!deferredInstallPrompt)return;
-  deferredInstallPrompt.prompt();
-  await deferredInstallPrompt.userChoice;
-  deferredInstallPrompt=null;
-  $("#installPwaBtn").style.display="none";
+  if(deferredInstallPrompt){
+    deferredInstallPrompt.prompt();
+    await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt=null;
+    return;
+  }
+  toast("На HTTP используй Chrome ⋮ → Добавить на главный экран");
 });
 
 if("serviceWorker" in navigator){
