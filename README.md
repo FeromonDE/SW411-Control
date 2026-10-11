@@ -60,18 +60,23 @@ Default base topic: `sw411`.
 
 ## Android app
 
-A native Android client lives in `android/` and uses the same REST + SSE backend as the web UI.
+The Android app in `android/` displays the controller's actual web panel in Android WebView. It uses the exact same HTML, CSS, settings and REST + SSE behavior as the browser, so controller UI updates appear in the app immediately.
 
 Features:
 
-- Native Jetpack Compose UI matching the mobile web panel
+- Identical web UI, including its layout, icons, animations and hold-to-confirm actions
 - HDMI 1–4 with custom names from the server
 - Power, Auto Source and eARC/ARC control
 - Firmware, temperature and current input
 - SSE live-status with automatic reconnect
-- Protected reboot / controller update confirmation
+- Hold-to-confirm reboot / controller update protection from the web panel
 - Configurable Nexbox address (default `http://192.168.2.159`)
-- Direct link back to the web settings panel
+- Full in-app settings for input names, MQTT and Home Assistant
+- Server address in **⋮ → Адрес сервера**, replacing the PWA installation action
+- Connection recovery screen with retry and address editing when Nexbox is unavailable
+- Android Back closes settings or the overflow menu before leaving the app
+
+Version 0.2.0 keeps the saved server address and the same release signing certificate as 0.1.0. The app still requires access to the Nexbox server, just as the browser does; it does not open a USB serial connection from the phone.
 
 GitHub Actions only runs for changes under `android/**`, changes to the Android workflow itself, or manual dispatch. The installable debug APK is uploaded as the `SW411-Control-Android` artifact and kept for 7 days.
 
@@ -98,3 +103,4 @@ GitHub Actions expects these repository secrets:
 - `SW411_SIGNING_KEY_PASSWORD`
 
 When the secrets are present, the workflow builds `SW411-Control-release.apk` and verifies its APK signature with `apksigner`. Without them, CI falls back to a debug APK.
+
