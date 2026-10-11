@@ -56,3 +56,23 @@ POST /api/ha/reboot
 Enable MQTT in **⋮ → Settings**, enter the broker address and credentials, and keep the default discovery prefix `homeassistant` for Home Assistant MQTT Discovery.
 
 Default base topic: `sw411`.
+
+
+## Android app
+
+A native Android client lives in `android/` and uses the same REST + SSE backend as the web UI.
+
+Features:
+
+- Native Jetpack Compose UI matching the mobile web panel
+- HDMI 1–4 with custom names from the server
+- Power, Auto Source and eARC/ARC control
+- Firmware, temperature and current input
+- SSE live-status with automatic reconnect
+- Protected reboot / controller update confirmation
+- Configurable Nexbox address (default `http://192.168.2.159`)
+- Direct link back to the web settings panel
+
+GitHub Actions only runs for changes under `android/**`, changes to the Android workflow itself, or manual dispatch. The installable debug APK is uploaded as the `SW411-Control-Android` artifact and kept for 7 days.
+
+Workflow: `.github/workflows/android-apk.yml`.
