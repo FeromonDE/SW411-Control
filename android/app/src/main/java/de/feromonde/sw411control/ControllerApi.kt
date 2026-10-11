@@ -181,7 +181,7 @@ class Sw411Api(baseUrl: String) {
     }
 }
 
-private fun JSONObject.names(): List<String> {
+private fun JSONObject.inputNamesOrDefault(): List<String> {
     val values = optJSONArray("input_names")
     return List(4) { index -> values?.optString(index)?.takeIf { it.isNotBlank() } ?: "HDMI ${index + 1}" }
 }
@@ -189,7 +189,7 @@ private fun JSONObject.nullableString(key: String): String? =
     if (!has(key) || isNull(key)) null else optString(key).takeIf { it.isNotBlank() }
 private fun JSONObject.nullableBoolean(key: String): Boolean? = if (!has(key) || isNull(key)) null else optBoolean(key)
 private fun JSONObject.toState(): Sw411State {
-    val names = names()
+    val names = inputNamesOrDefault()
     val input = if (has("input") && !isNull("input")) optInt("input").takeIf { it in 1..4 } else null
     return Sw411State(optBoolean("connected"), nullableString("firmware"), input,
         nullableString("input_name") ?: input?.let { names[it - 1] }, names,
@@ -199,7 +199,7 @@ private fun JSONObject.toState(): Sw411State {
 }
 private fun JSONObject.toSettings(): ControllerSettings {
     val mqtt = optJSONObject("mqtt") ?: JSONObject()
-    return ControllerSettings(names(), optString("api_token"), MqttSettings(
+    return ControllerSettings(inputNamesOrDefault(), optString("api_token"), MqttSettings(
         enabled = mqtt.optBoolean("enabled"), host = mqtt.optString("host"), port = mqtt.optInt("port", 1883),
         username = mqtt.optString("username"), baseTopic = mqtt.optString("base_topic", "sw411"),
         discoveryPrefix = mqtt.optString("discovery_prefix", "homeassistant"), connected = mqtt.optBoolean("connected")))

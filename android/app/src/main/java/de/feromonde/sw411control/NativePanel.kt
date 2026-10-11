@@ -51,6 +51,7 @@ internal fun NativePanel(vm: MainViewModel) {
         }.safeDrawingPadding()) {
             val viewportWidth = maxWidth.value
             val wide = viewportWidth >= 560
+            val menuWidth = minOf(310.dp, maxWidth - 32.dp)
             val padding = if (wide) 24.dp else 16.dp
             Column(Modifier.align(Alignment.TopCenter).widthIn(max = 650.dp).fillMaxWidth()
                 .verticalScroll(rememberScrollState()).padding(horizontal = padding)
@@ -74,7 +75,7 @@ internal fun NativePanel(vm: MainViewModel) {
                             val y = with(LocalDensity.current) { 54.dp.roundToPx() }
                             Popup(alignment = Alignment.TopEnd, offset = IntOffset(0, y),
                                 onDismissRequest = { menuOpen = false }, properties = PopupProperties(focusable = true)) {
-                                Column(Modifier.width(minOf(310.dp, maxWidth - 32.dp))
+                                Column(Modifier.width(menuWidth)
                                     .shadow(22.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp))
                                     .background(Color(0xFA0D1822)).border(1.dp, Line, RoundedCornerShape(18.dp)).padding(8.dp)) {
                                     Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 9.dp, bottom = 10.dp),
