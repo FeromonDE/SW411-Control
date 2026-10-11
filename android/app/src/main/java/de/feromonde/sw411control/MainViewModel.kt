@@ -204,32 +204,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 repeat(150) {
                     delay(1200)
                     try {
-                        when (val update = api.updateStatus()) {
-                            is UpdateStatus -> when (update.state) {
-                                "success" -> {
-                                    val state = runCatching { api.status() }.getOrDefault(_ui.value.status)
-                                    _ui.update {
-                                        it.copy(
-                                            busy = false,
-                                            status = state,
-                                            message = update.targetVersion?.let { v ->
-                                                "SW411 Control v$v установлен"
-                                            } ?: "SW411 Control обновлён"
-                                        )
-                                    }
-                                    reconnect()
-                                    return@launch
+                        val update = api.updateStatus()
+                        when (update.state) {
+                            "success" -> {
+                                val state = runCatching { api.status() }.getOrDefault(_ui.value.status)
+                                _ui.update {
+                                    it.copy(
+                                        busy = false,
+                                        status = state,
+                                        message = update.targetVersion?.let { v ->
+                                            "SW411 Control v$v установлен"
+                                        } ?: "SW411 Control обновлён"
+                                    )
                                 }
-                                "failed" -> {
-                                    _ui.update {
-                                        it.copy(
-                                            busy = false,
-                                            error = update.error ?: "Обновление завершилось ошибкой"
-                                        )
-                                    }
-                                    reconnect()
-                                    return@launch
+                                reconnect()
+                                return@launch
+                            }
+                            "failed" -> {
+                                _ui.update {
+                                    it.copy(
+                                        busy = false,
+                                        error = update.error ?: "Обновление завершилось ошибкой"
+                                    )
                                 }
+                                reconnect()
+                                return@launch
                             }
                         }
                     } catch (_: Exception) {
