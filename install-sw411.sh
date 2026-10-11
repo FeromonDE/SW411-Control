@@ -43,7 +43,7 @@ except Exception:
 
 PORT = os.environ.get("SW411_PORT", "/dev/sw411")
 BAUD = int(os.environ.get("SW411_BAUD", "115200"))
-APP_VERSION = "0.4.1"
+APP_VERSION = "0.4.2"
 UPDATE_REQUEST = "/run/sw411-control/update.request"
 UPDATE_STATUS = "/var/lib/sw411-control/update-status.json"
 CONFIG_PATH = os.environ.get("SW411_CONFIG", "/var/lib/sw411-control/config.json")
@@ -1101,12 +1101,6 @@ cat > /opt/sw411/templates/index.html.new <<'HTML'
     }
     .live-badge{display:inline-flex;align-items:center;gap:6px}
     .live-badge:before{content:"";width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green)}
-    .audio-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;padding:13px 14px 15px}
-    .audio-opt{
-      border:1px solid var(--line);border-radius:13px;padding:10px 4px;
-      background:rgba(13,24,34,.72);color:#8292a6;font-weight:800;font-size:12px
-    }
-    .audio-opt:disabled{opacity:.6}
     .audio-note{padding:0 14px 13px;color:var(--muted);font-size:11px;line-height:1.4}
     .modal{
       position:fixed;inset:0;z-index:60;display:none;align-items:flex-end;justify-content:center;
@@ -1295,25 +1289,6 @@ cat > /opt/sw411/templates/index.html.new <<'HTML'
           <small>Звук с телевизора и HDMI-CEC аудио</small>
         </div>
         <button class="switch" id="earcSwitch" aria-label="eARC"><i></i></button>
-      </div>
-      <div class="mode-row" style="display:block">
-        <div style="display:flex;align-items:center;gap:14px">
-          <div class="mode-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 9v6"/><path d="M8 6v12"/><path d="M12 4v16"/><path d="M16 7v10"/><path d="M20 10v4"/></svg>
-          </div>
-          <div class="mode-copy">
-            <strong>Audio EDID</strong>
-            <small>2.0 / 5.1 / 7.1 / PASS</small>
-          </div>
-          <span class="badge">USB CLI нет</span>
-        </div>
-        <div class="audio-grid">
-          <button class="audio-opt" disabled>2.0</button>
-          <button class="audio-opt" disabled>5.1</button>
-          <button class="audio-opt" disabled>7.1</button>
-          <button class="audio-opt" disabled>PASS</button>
-        </div>
-        <div class="audio-note">Прошивка SW411 не публикует команду Audio EDID в serial CLI. Я не отправляю непроверенные команды устройству.</div>
       </div>
       <div class="mode-row">
         <div class="mode-icon">
