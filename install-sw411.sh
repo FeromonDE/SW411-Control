@@ -10,7 +10,7 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y python3-flask python3-serial nginx
+apt-get install -y python3-flask python3-serial nginx curl
 
 if ! getent passwd sw411 >/dev/null; then
   useradd --system --no-create-home --home-dir /opt/sw411 --shell /usr/sbin/nologin sw411
@@ -33,6 +33,8 @@ from flask import Flask, jsonify, request, render_template
 
 PORT = os.environ.get("SW411_PORT", "/dev/sw411")
 BAUD = int(os.environ.get("SW411_BAUD", "115200"))
+APP_VERSION = "0.3.0"
+UPDATE_REQUEST = "/run/sw411-control/update.request"
 
 app = Flask(__name__)
 
@@ -284,6 +286,32 @@ def api_reboot():
         return jsonify(ok=False, error=str(e)), 500
 
 
+@app.get("/api/app")
+def api_app():
+    return jsonify(
+        name="SW411 Control",
+        version=APP_VERSION,
+        update_supported=True,
+    )
+
+
+@app.post("/api/update-control")
+def api_update_control():
+    try:
+        os.makedirs(os.path.dirname(UPDATE_REQUEST), exist_ok=True)
+        if os.path.exists(UPDATE_REQUEST):
+            return jsonify(ok=True, already_running=True, version=APP_VERSION), 202
+
+        with open(UPDATE_REQUEST, "w", encoding="utf-8") as fh:
+            fh.write(datetime.now().isoformat())
+
+        add_log("Запущено обновление SW411 Control из GitHub", "info")
+        return jsonify(ok=True, version=APP_VERSION), 202
+    except Exception as e:
+        add_log(f"Ошибка запуска обновления SW411 Control: {e}", "error")
+        return jsonify(ok=False, error=str(e)), 500
+
+
 @app.get("/health")
 def health():
     return jsonify(ok=True)
@@ -362,6 +390,36 @@ cat > /opt/sw411/templates/index.html <<'HTML'
     }
     .device-icon svg{width:28px;height:28px}
     .headcopy{min-width:0;flex:1}
+    .more-wrap{position:relative;flex:0 0 auto}
+    .more-btn{
+      width:46px;height:46px;border:1px solid var(--line);border-radius:15px;
+      display:grid;place-items:center;color:#c7d2df;cursor:pointer;
+      background:linear-gradient(145deg,rgba(31,45,59,.94),rgba(15,26,36,.94));
+      box-shadow:inset 0 1px rgba(255,255,255,.04),0 10px 24px rgba(0,0,0,.18)
+    }
+    .more-btn:active{transform:scale(.96)}
+    .more-btn svg{width:24px;height:24px}
+    .more-menu{
+      display:none;position:absolute;z-index:30;right:0;top:54px;width:min(310px,calc(100vw - 32px));
+      border:1px solid var(--line);border-radius:18px;padding:8px;
+      background:rgba(13,24,34,.98);box-shadow:0 22px 60px rgba(0,0,0,.48);
+      backdrop-filter:blur(16px)
+    }
+    .more-menu.open{display:block;animation:pop .14s ease-out}
+    .menu-title{
+      padding:9px 10px 10px;color:var(--muted);font-size:12px;
+      display:flex;justify-content:space-between;gap:12px
+    }
+    .menu-action{
+      width:100%;border:0;border-radius:14px;padding:12px;
+      display:flex;align-items:center;gap:12px;text-align:left;color:var(--text);
+      background:rgba(31,45,59,.72);cursor:pointer
+    }
+    .menu-action:active{transform:scale(.985)}
+    .menu-action svg{width:25px;height:25px;color:var(--cyan);flex:0 0 auto}
+    .menu-action span{display:block;min-width:0}
+    .menu-action strong{display:block;font-size:14px}
+    .menu-action small{display:block;color:var(--muted);font-size:11px;margin-top:2px}
     h1{font-size:clamp(26px,7vw,36px);line-height:1.02;margin:0 0 5px;letter-spacing:-.03em}
     .subtitle{color:var(--muted);font-size:14px}
     .status-card{
@@ -501,6 +559,18 @@ cat > /opt/sw411/templates/index.html <<'HTML'
     <div class="headcopy">
       <h1>SW411 Control</h1>
       <div class="subtitle">Управление HDMI переключателем</div>
+    </div>
+    <div class="more-wrap">
+      <button class="more-btn" id="moreBtn" aria-label="Меню" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+      </button>
+      <div class="more-menu" id="moreMenu">
+        <div class="menu-title">SW411 Control <span id="appVersion">v—</span></div>
+        <button class="menu-action" id="updateControlBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
+          <span><strong>Обновить из GitHub</strong><small>Установить актуальную версию</small></span>
+        </button>
+      </div>
     </div>
   </header>
 
@@ -774,6 +844,77 @@ $("#refreshBtn").addEventListener("click",async()=>{
   toast("Статус обновлён");
 });
 
+async function loadAppInfo(){
+  try{
+    const info=await api("/api/app");
+    $("#appVersion").textContent="v"+(info.version||"—");
+    return info;
+  }catch(_){
+    $("#appVersion").textContent="v—";
+    return null;
+  }
+}
+
+$("#moreBtn").addEventListener("click",(e)=>{
+  e.stopPropagation();
+  const open=!$("#moreMenu").classList.contains("open");
+  $("#moreMenu").classList.toggle("open",open);
+  $("#moreBtn").setAttribute("aria-expanded",open?"true":"false");
+  if(open) loadAppInfo();
+});
+
+$("#moreMenu").addEventListener("click",e=>e.stopPropagation());
+
+document.addEventListener("click",()=>{
+  $("#moreMenu").classList.remove("open");
+  $("#moreBtn").setAttribute("aria-expanded","false");
+});
+
+$("#updateControlBtn").addEventListener("click",async()=>{
+  if(busy)return;
+  $("#moreMenu").classList.remove("open");
+  $("#moreBtn").setAttribute("aria-expanded","false");
+
+  if(!confirm("Обновить SW411 Control до актуальной версии из GitHub?")) return;
+
+  const before=(await loadAppInfo())?.version||null;
+  setBusy(true);
+  try{
+    await api("/api/update-control",{method:"POST"});
+    toast("Обновление запущено…");
+  }catch(e){
+    setBusy(false);
+    toast(e.message,true);
+    return;
+  }
+
+  let attempts=0;
+  const check=async()=>{
+    attempts++;
+    try{
+      const info=await api("/api/app");
+      if(info?.version){
+        $("#appVersion").textContent="v"+info.version;
+        if(attempts>2){
+          setBusy(false);
+          toast(before && info.version!==before ? `Обновлено до v${info.version}` : "SW411 Control обновлён");
+          setTimeout(()=>location.reload(),900);
+          return;
+        }
+      }
+    }catch(_){}
+
+    if(attempts<30){
+      setTimeout(check,1000);
+    }else{
+      setBusy(false);
+      toast("Обновление выполняется. Обнови страницу через несколько секунд.");
+    }
+  };
+  setTimeout(check,1200);
+});
+
+loadAppInfo();
 refresh(true);
 setInterval(()=>{if(!busy && document.visibilityState==="visible")refresh(false)},2000);
 </script>
@@ -788,6 +929,48 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="s
 UDEV
 udevadm control --reload-rules
 udevadm trigger || true
+
+cat > /usr/local/sbin/sw411-control-update <<'UPDATER'
+#!/bin/bash
+set -euo pipefail
+
+REQ=/run/sw411-control/update.request
+TMP=/tmp/sw411-control-update.$.sh
+URL=https://raw.githubusercontent.com/FeromonDE/SW411-Control/main/install-sw411.sh
+
+rm -f "$REQ"
+trap 'rm -f "$TMP"' EXIT
+
+sleep 1
+curl -fsSL "$URL" -o "$TMP"
+bash -n "$TMP"
+chmod 0700 "$TMP"
+exec /bin/bash "$TMP"
+UPDATER
+chmod 0755 /usr/local/sbin/sw411-control-update
+
+cat > /etc/systemd/system/sw411-update.service <<'UPDATEUNIT'
+[Unit]
+Description=Update SW411 Control from GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/sw411-control-update
+UPDATEUNIT
+
+cat > /etc/systemd/system/sw411-update.path <<'PATHUNIT'
+[Unit]
+Description=Watch for SW411 Control update requests
+
+[Path]
+PathExists=/run/sw411-control/update.request
+Unit=sw411-update.service
+
+[Install]
+WantedBy=multi-user.target
+PATHUNIT
 
 cat > /etc/systemd/system/sw411-control.service <<'UNIT'
 [Unit]
@@ -806,6 +989,8 @@ Environment=SW411_BAUD=115200
 ExecStart=/usr/bin/python3 /opt/sw411/app.py
 Restart=on-failure
 RestartSec=2
+RuntimeDirectory=sw411-control
+RuntimeDirectoryMode=0750
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
@@ -845,6 +1030,7 @@ systemctl daemon-reload
 systemctl enable --now nginx
 nginx -t
 systemctl reload nginx
+systemctl enable --now sw411-update.path
 systemctl enable sw411-control.service
 systemctl restart sw411-control.service
 
