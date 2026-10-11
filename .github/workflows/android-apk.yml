@@ -59,6 +59,7 @@ jobs:
         run: gradle -p android :app:testDebugUnitTest :app:lintRelease :app:assembleRelease :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
 
       - name: Verify release signature
+        id: release_signature
         if: env.SW411_SIGNING_KEY_B64 != ''
         shell: bash
         run: |
@@ -69,6 +70,7 @@ jobs:
           "$APKSIGNER" verify --verbose --print-certs "$APK"
 
       - name: Build debug APK when signing secrets are missing
+        id: debug_build
         if: env.SW411_SIGNING_KEY_B64 == ''
         run: |
           echo "::warning::Release signing secrets are not configured; building debug APK."
@@ -81,15 +83,25 @@ jobs:
           SDKMANAGER="$(find "$ANDROID_HOME" -type f -name sdkmanager | sort -V | tail -n1)"
           test -n "$SDKMANAGER"
           export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$(dirname "$SDKMANAGER"):$PATH"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/sw411-avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          trap 'tail -n 100 "$RUNNER_TEMP/sw411-emulator.log" 2>/dev/null || true' EXIT
           sdkmanager "emulator" "system-images;android-35;google_apis;x86_64"
           test -e /dev/kvm
           sudo chmod a+rw /dev/kvm
           echo no | avdmanager create avd --name sw411-native-ui --package "system-images;android-35;google_apis;x86_64" --device pixel_5
           nohup "$ANDROID_HOME/emulator/emulator" -avd sw411-native-ui -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect > "$RUNNER_TEMP/sw411-emulator.log" 2>&1 &
-          adb wait-for-device
+          EMULATOR_PID=$!
           BOOTED=0
-          for attempt in {1..90}; do
-            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+          for attempt in {1..120}; do
+            if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
+              echo "Android emulator process exited"
+              exit 1
+            fi
+            BOOT_STATE="$(timeout 5 adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+            echo "Emulator boot attempt $attempt: $BOOT_STATE"
+            if [ "$BOOT_STATE" = "1" ]; then
               BOOTED=1
               break
             fi
@@ -130,6 +142,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Prepare artifact
+        if: always() && (steps.release_signature.outcome == 'success' || steps.debug_build.outcome == 'success')
         shell: bash
         run: |
           set -euo pipefail
@@ -143,6 +156,7 @@ jobs:
           fi
 
       - name: Upload APK
+        if: always() && (steps.release_signature.outcome == 'success' || steps.debug_build.outcome == 'success')
         uses: actions/upload-artifact@v4
         with:
           name: SW411-Control-Android
