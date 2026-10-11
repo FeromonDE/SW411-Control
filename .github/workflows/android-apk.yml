@@ -23,6 +23,11 @@ jobs:
     name: Build installable APK
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      SW411_SIGNING_KEY_B64: ${{ secrets.SW411_SIGNING_KEY_B64 }}
+      SW411_SIGNING_STORE_PASSWORD: ${{ secrets.SW411_SIGNING_STORE_PASSWORD }}
+      SW411_SIGNING_KEY_ALIAS: ${{ secrets.SW411_SIGNING_KEY_ALIAS }}
+      SW411_SIGNING_KEY_PASSWORD: ${{ secrets.SW411_SIGNING_KEY_PASSWORD }}
 
     steps:
       - name: Checkout
@@ -39,14 +44,48 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build debug APK
-        run: gradle -p android :app:assembleDebug --stacktrace
+      - name: Prepare release signing key
+        if: env.SW411_SIGNING_KEY_B64 != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEYSTORE="$RUNNER_TEMP/SW411-Control-release.p12"
+          printf '%s' "$SW411_SIGNING_KEY_B64" | base64 --decode > "$KEYSTORE"
+          chmod 600 "$KEYSTORE"
+          echo "SW411_SIGNING_STORE_FILE=$KEYSTORE" >> "$GITHUB_ENV"
+
+      - name: Build signed release APK
+        if: env.SW411_SIGNING_KEY_B64 != ''
+        run: gradle -p android :app:assembleRelease --stacktrace
+
+      - name: Verify release signature
+        if: env.SW411_SIGNING_KEY_B64 != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          test -s "$APK"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n1)"
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+
+      - name: Build debug APK when signing secrets are missing
+        if: env.SW411_SIGNING_KEY_B64 == ''
+        run: |
+          echo "::warning::Release signing secrets are not configured; building debug APK."
+          gradle -p android :app:assembleDebug --stacktrace
 
       - name: Prepare artifact
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p out
-          cp android/app/build/outputs/apk/debug/app-debug.apk out/SW411-Control-debug.apk
-          sha256sum out/SW411-Control-debug.apk | tee out/SW411-Control-debug.apk.sha256
+          if [ -n "$SW411_SIGNING_KEY_B64" ]; then
+            cp android/app/build/outputs/apk/release/app-release.apk out/SW411-Control-release.apk
+            sha256sum out/SW411-Control-release.apk | tee out/SW411-Control-release.apk.sha256
+          else
+            cp android/app/build/outputs/apk/debug/app-debug.apk out/SW411-Control-debug.apk
+            sha256sum out/SW411-Control-debug.apk | tee out/SW411-Control-debug.apk.sha256
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
