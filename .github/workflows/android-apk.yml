@@ -56,7 +56,7 @@ jobs:
 
       - name: Build signed release APK
         if: env.SW411_SIGNING_KEY_B64 != ''
-        run: gradle -p android :app:assembleRelease --stacktrace
+        run: gradle -p android :app:assembleRelease :app:lintRelease --stacktrace
 
       - name: Verify release signature
         if: env.SW411_SIGNING_KEY_B64 != ''
@@ -94,3 +94,4 @@ jobs:
           path: out/
           retention-days: 7
           if-no-files-found: error
+

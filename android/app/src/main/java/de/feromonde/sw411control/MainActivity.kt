@@ -11,6 +11,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
 import android.webkit.WebChromeClient
+import android.webkit.JsResult
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -68,6 +69,21 @@ class MainActivity : ComponentActivity() {
                 setSupportMultipleWindows(false)
             }
             webChromeClient = object : WebChromeClient() {
+                override fun onJsConfirm(view: WebView, url: String, message: String, result: JsResult): Boolean {
+                    if (!isControllerUrl(url)) {
+                        result.cancel()
+                        return true
+                    }
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("SW411 Control")
+                        .setMessage(message)
+                        .setPositiveButton("Подтвердить") { _, _ -> result.confirm() }
+                        .setNegativeButton("Отмена") { _, _ -> result.cancel() }
+                        .setOnCancelListener { result.cancel() }
+                        .show()
+                    return true
+                }
+
                 override fun onProgressChanged(view: WebView, value: Int) {
                     progress.progress = value
                     progress.visibility = if (value < 100 && !pageFailed) View.VISIBLE else View.GONE
