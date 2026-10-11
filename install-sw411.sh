@@ -626,11 +626,11 @@ async function api(url, options={}){
   return data;
 }
 
-function render(s){
+function render(s, fromServer=false){
   s = {...(s||{})};
 
   if(pendingInput !== null){
-    if(s.input === pendingInput){
+    if(fromServer && s.input === pendingInput){
       pendingInput = null;
       pendingInputUntil = 0;
     }else if(Date.now() < pendingInputUntil){
@@ -665,7 +665,7 @@ async function refresh(force=false){
   try{
     const status = await api("/api/status"+(force?"?force=1":""));
     if(epoch !== statusEpoch) return;
-    render(status);
+    render(status, true);
     await loadLogs();
   }catch(e){
     if(epoch !== statusEpoch) return;
