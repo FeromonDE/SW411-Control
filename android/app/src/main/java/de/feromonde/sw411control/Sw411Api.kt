@@ -33,6 +33,13 @@ data class Sw411Log(
     val level: String
 )
 
+data class UpdateStatus(
+    val state: String,
+    val currentVersion: String? = null,
+    val targetVersion: String? = null,
+    val error: String? = null
+)
+
 class Sw411Api(baseUrl: String) {
     private val baseUrl = normalizeBaseUrl(baseUrl)
     private val jsonType = "application/json; charset=utf-8".toMediaType()
@@ -93,6 +100,16 @@ class Sw411Api(baseUrl: String) {
 
     suspend fun updateController() {
         post("/api/update-control", null)
+    }
+
+    suspend fun updateStatus(): UpdateStatus {
+        val o = getJson("/api/update-status")
+        return UpdateStatus(
+            state = o.optString("state", "unknown"),
+            currentVersion = o.optNullableString("current_version"),
+            targetVersion = o.optNullableString("target_version"),
+            error = o.optNullableString("error")
+        )
     }
 
     suspend fun streamEvents(
