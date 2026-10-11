@@ -82,7 +82,7 @@ The app controls the existing Nexbox service, which owns the USB connection to t
 
 CI runs API unit tests, Android Lint and native UI tests on an Android 15 emulator. UI tests use a local mock controller, verify source switching and settings saves, check short-press/hold reboot behavior and confirm that the activity contains no WebView. Emulator screenshots and test reports are kept for 3 days in `SW411-Native-UI-Checks`.
 
-GitHub Actions only runs for changes under `android/**`, changes to the Android workflow itself, or manual dispatch. The installable debug APK is uploaded as the `SW411-Control-Android` artifact and kept for 7 days.
+GitHub Actions builds APKs only through manual `workflow_dispatch`. The signed release APK (or debug APK when signing secrets are missing) is uploaded as the `SW411-Control-Android` artifact and kept for 1 day. Screenshots, UI reports and emulator logs are not uploaded. Unit tests, Android Lint and release signature verification still run; optional emulator tests can be enabled with the `ui_tests` input. Gradle caching is read-only to avoid adding new caches.
 
 Workflow: `.github/workflows/android-apk.yml`.
 

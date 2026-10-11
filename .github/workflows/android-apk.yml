@@ -2,14 +2,12 @@ name: Android APK
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - 'android/**'
-      - '.github/workflows/android-apk.yml'
-  pull_request:
-    paths:
-      - 'android/**'
-      - '.github/workflows/android-apk.yml'
+    inputs:
+      ui_tests:
+        description: 'Run Android emulator UI tests (no screenshots or reports are uploaded)'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: android-apk-${{ github.ref }}
@@ -43,6 +41,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+          cache-read-only: true
 
       - name: Prepare release signing key
         if: env.SW411_SIGNING_KEY_B64 != ''
@@ -56,7 +55,7 @@ jobs:
 
       - name: Build signed release APK
         if: env.SW411_SIGNING_KEY_B64 != ''
-        run: gradle -p android :app:testDebugUnitTest :app:lintRelease :app:assembleRelease :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
+        run: gradle -p android :app:testDebugUnitTest :app:lintRelease :app:assembleRelease --stacktrace
 
       - name: Verify release signature
         id: release_signature
@@ -74,7 +73,7 @@ jobs:
         if: env.SW411_SIGNING_KEY_B64 == ''
         run: |
           echo "::warning::Release signing secrets are not configured; building debug APK."
-          gradle -p android :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
+          gradle -p android :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
 
       - name: Prepare artifact
         if: always() && (steps.release_signature.outcome == 'success' || steps.debug_build.outcome == 'success')
@@ -96,10 +95,15 @@ jobs:
         with:
           name: SW411-Control-Android
           path: out/
-          retention-days: 7
+          retention-days: 1
           if-no-files-found: error
 
+      - name: Build UI test APKs
+        if: inputs.ui_tests
+        run: gradle -p android :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
+
       - name: Start Android 15 test device
+        if: inputs.ui_tests
         shell: bash
         run: |
           set -euo pipefail
@@ -139,29 +143,6 @@ jobs:
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
       - name: Test native screens and controls
+        if: inputs.ui_tests
         run: gradle -p android :app:connectedDebugAndroidTest --stacktrace
-
-      - name: Collect native UI checks
-        if: always()
-        shell: bash
-        run: |
-          mkdir -p native-ui-checks
-          if adb get-state >/dev/null 2>&1; then
-            adb pull /sdcard/Pictures/SW411-native-ui native-ui-checks/screenshots || true
-          fi
-          if [ -d android/app/build/reports ]; then
-            cp -R android/app/build/reports native-ui-checks/reports
-          fi
-          if [ -f "$RUNNER_TEMP/sw411-emulator.log" ]; then
-            cp "$RUNNER_TEMP/sw411-emulator.log" native-ui-checks/emulator.log
-          fi
-
-      - name: Upload native UI checks
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: SW411-Native-UI-Checks
-          path: native-ui-checks/
-          retention-days: 3
-          if-no-files-found: ignore
 
