@@ -18,6 +18,7 @@ fi
 usermod -aG dialout sw411
 
 install -d -m 0755 /opt/sw411/templates
+install -d -o sw411 -g sw411 -m 0750 /var/lib/sw411-control
 
 cat > /opt/sw411/app.py.new <<'PYAPP'
 #!/usr/bin/env python3
@@ -42,8 +43,9 @@ except Exception:
 
 PORT = os.environ.get("SW411_PORT", "/dev/sw411")
 BAUD = int(os.environ.get("SW411_BAUD", "115200"))
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.4.1"
 UPDATE_REQUEST = "/run/sw411-control/update.request"
+UPDATE_STATUS = "/var/lib/sw411-control/update-status.json"
 CONFIG_PATH = os.environ.get("SW411_CONFIG", "/var/lib/sw411-control/config.json")
 
 app = Flask(__name__)
@@ -814,7 +816,7 @@ def manifest():
 
 @app.get("/sw.js")
 def service_worker():
-    js = """const C='sw411-v0.4.0';
+    js = """const C='sw411-v0.4.1';
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(C).then(c=>c.addAll(['/','/manifest.webmanifest','/icon.svg'])))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==C).map(k=>caches.delete(k)))));self.clients.claim()});
 self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;const u=new URL(e.request.url);if(u.pathname.startsWith('/api/'))return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request).then(r=>r||caches.match('/'))))});"""
@@ -825,6 +827,37 @@ self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;const u=new
 def icon_svg():
     svg = """<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop stop-color='#163047'/><stop offset='1' stop-color='#071019'/></linearGradient></defs><rect width='512' height='512' rx='112' fill='url(#g)'/><rect x='96' y='170' width='320' height='172' rx='42' fill='none' stroke='#e9f7ff' stroke-width='24'/><circle cx='160' cy='256' r='14' fill='#22d3ee'/><circle cx='352' cy='256' r='14' fill='#22e39a'/></svg>"""
     return Response(svg, mimetype="image/svg+xml")
+
+
+def read_update_status():
+    try:
+        with open(UPDATE_STATUS, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        return {"state": "idle", "current_version": APP_VERSION}
+    except Exception as e:
+        return {"state": "unknown", "current_version": APP_VERSION, "error": str(e)}
+
+
+def write_update_status(state, **extra):
+    payload = {
+        "state": state,
+        "current_version": APP_VERSION,
+        "updated_at": datetime.now().isoformat()
+    }
+    payload.update(extra)
+    tmp = UPDATE_STATUS + ".app.tmp"
+    os.makedirs(os.path.dirname(UPDATE_STATUS), exist_ok=True)
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, UPDATE_STATUS)
+    return payload
+
+
+@app.get("/api/update-status")
+def api_update_status():
+    return jsonify(read_update_status())
 
 
 @app.get("/api/app")
@@ -840,15 +873,21 @@ def api_app():
 def api_update_control():
     try:
         os.makedirs(os.path.dirname(UPDATE_REQUEST), exist_ok=True)
-        if os.path.exists(UPDATE_REQUEST):
-            return jsonify(ok=True, already_running=True, version=APP_VERSION), 202
+        status = read_update_status()
+        if os.path.exists(UPDATE_REQUEST) or status.get("state") in ("queued", "running"):
+            return jsonify(ok=True, already_running=True, status=status, version=APP_VERSION), 202
 
+        write_update_status("queued", source="github")
         with open(UPDATE_REQUEST, "w", encoding="utf-8") as fh:
             fh.write(datetime.now().isoformat())
 
         add_log("Запущено обновление SW411 Control из GitHub", "info")
-        return jsonify(ok=True, version=APP_VERSION), 202
+        return jsonify(ok=True, version=APP_VERSION, status=read_update_status()), 202
     except Exception as e:
+        try:
+            write_update_status("failed", error=str(e))
+        except Exception:
+            pass
         add_log(f"Ошибка запуска обновления SW411 Control: {e}", "error")
         return jsonify(ok=False, error=str(e)), 500
 
@@ -1637,6 +1676,7 @@ async function updateControl(){
 
   const before=(await loadAppInfo())?.version||null;
   setBusy(true);
+
   try{
     await api("/api/update-control",{method:"POST"});
     toast("Обновление запущено…");
@@ -1651,27 +1691,40 @@ async function updateControl(){
     eventSource=null;
   }
 
-  let attempts=0;
+  const started=Date.now();
+  let sawOffline=false;
+
   const check=async()=>{
-    attempts++;
     try{
-      const info=await api("/api/app");
-      if(info?.version && attempts>2){
-        $("#appVersion").textContent="v"+info.version;
+      const st=await api("/api/update-status");
+      if(st.state==="failed"){
         setBusy(false);
-        toast(before && info.version!==before?`Обновлено до v${info.version}`:"SW411 Control обновлён");
-        setTimeout(()=>location.reload(),900);
+        toast(st.error||"Обновление завершилось ошибкой",true);
+        startLive();
         return;
       }
-    }catch(_){}
+      if(st.state==="success"){
+        const info=await loadAppInfo();
+        setBusy(false);
+        const after=info?.version||st.target_version||before||"";
+        toast(after ? ("SW411 Control v"+after+" установлен") : "SW411 Control обновлён");
+        setTimeout(()=>location.reload(),700);
+        return;
+      }
+    }catch(_){
+      sawOffline=true;
+    }
 
-    if(attempts<40)setTimeout(check,1000);
-    else{
+    if(Date.now()-started < 180000){
+      setTimeout(check,1200);
+    }else{
       setBusy(false);
-      toast("Обновление ещё выполняется. Обнови страницу через несколько секунд.");
+      toast(sawOffline ? "Сервис ещё не вернулся после обновления" : "Обновление не завершилось за 3 минуты",true);
+      startLive();
     }
   };
-  setTimeout(check,1200);
+
+  setTimeout(check,800);
 }
 
 bindHold($("#updateControlBtn"),updateControl,1500);
@@ -1795,18 +1848,58 @@ cat > /usr/local/sbin/sw411-control-update <<'UPDATER'
 set -euo pipefail
 
 REQ=/run/sw411-control/update.request
+STATUS_DIR=/var/lib/sw411-control
+STATUS="$STATUS_DIR/update-status.json"
 TMP=$(mktemp /tmp/sw411-control-update.XXXXXX.sh)
 URL=https://raw.githubusercontent.com/FeromonDE/SW411-Control/main/install-sw411.sh
 
+mkdir -p "$STATUS_DIR"
 rm -f "$REQ"
-trap 'rm -f "$TMP"' EXIT
 
-sleep 1
-curl -fsSL "$URL" -o "$TMP"
+write_status() {
+  local state="$1"
+  local target="${2:-}"
+  local error="${3:-}"
+  local tmp_status
+  tmp_status=$(mktemp "$STATUS_DIR/.update-status.XXXXXX")
+  python3 - "$tmp_status" "$state" "$target" "$error" <<'PY'
+import json, sys
+from datetime import datetime
+path, state, target, error = sys.argv[1:5]
+data = {"state": state, "updated_at": datetime.now().isoformat()}
+if target:
+    data["target_version"] = target
+if error:
+    data["error"] = error
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(data, fh, ensure_ascii=False)
+PY
+  chown sw411:sw411 "$tmp_status"
+  chmod 0600 "$tmp_status"
+  mv -f "$tmp_status" "$STATUS"
+}
+
+cleanup() {
+  local rc=$?
+  rm -f "$TMP"
+  if [ "$rc" -ne 0 ]; then
+    write_status failed "${TARGET_VERSION:-}" "Updater exited with code $rc"
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
+
+write_status running
+curl -fsSL --retry 3 --connect-timeout 10 "$URL" -o "$TMP"
 bash -n "$TMP"
-chmod 0700 "$TMP"
+
+TARGET_VERSION=$(sed -n 's/^APP_VERSION = "\([^"]*\)".*/\1/p' "$TMP" | head -n1)
+write_status running "$TARGET_VERSION"
+
 /bin/bash "$TMP"
-UPDATER
+
+write_status success "$TARGET_VERSION"
+UPDATERUPDATER
 chmod 0755 /usr/local/sbin/sw411-control-update
 
 cat > /etc/systemd/system/sw411-update.service <<'UPDATEUNIT'
