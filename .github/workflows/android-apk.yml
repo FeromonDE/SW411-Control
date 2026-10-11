@@ -78,6 +78,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          SDKMANAGER="$(find "$ANDROID_HOME" -type f -name sdkmanager | sort -V | tail -n1)"
+          test -n "$SDKMANAGER"
+          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$(dirname "$SDKMANAGER"):$PATH"
           sdkmanager "emulator" "system-images;android-35;google_apis;x86_64"
           test -e /dev/kvm
           sudo chmod a+rw /dev/kvm
@@ -97,6 +100,7 @@ jobs:
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 1
           adb shell input keyevent 82
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
       - name: Test native screens and controls
         run: gradle -p android :app:connectedDebugAndroidTest --stacktrace
