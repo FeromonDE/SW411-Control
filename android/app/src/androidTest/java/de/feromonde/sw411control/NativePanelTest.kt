@@ -46,7 +46,7 @@ class NativePanelTest {
                     }
                     val response = when {
                         path == "/api/status" -> state()
-                        path == "/api/app" -> "{\"version\":\"0.4.1\"}"
+                        path == "/api/app" -> "{\"version\":\"0.4.2\"}"
                         path == "/api/logs" -> "[{\"time\":\"17:00:00\",\"message\":\"Устройство подключено\",\"level\":\"info\"}]"
                         path == "/api/settings" -> {
                             if (request.method == "PUT") {
@@ -102,7 +102,7 @@ class NativePanelTest {
         compose.activityRule.scenario.onActivity { assertFalse(containsWebView(it.window.decorView)) }
         screenshot("native-home")
         compose.onNodeWithText("Ручной режим").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("Audio EDID").assertIsDisplayed()
+        compose.onNodeWithText("Audio EDID").assertDoesNotExist()
         screenshot("native-modes")
     }
 
