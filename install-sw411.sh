@@ -805,7 +805,8 @@ systemctl daemon-reload
 systemctl enable --now nginx
 nginx -t
 systemctl reload nginx
-systemctl enable --now sw411-control.service
+systemctl enable sw411-control.service
+systemctl restart sw411-control.service
 
 sleep 1
 
