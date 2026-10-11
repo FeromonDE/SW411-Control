@@ -9,6 +9,8 @@ import android.webkit.WebView
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import java.net.InetAddress
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
@@ -111,6 +113,52 @@ class NativePanelTest {
         assertEquals(2, input)
     }
 
+    private fun assertSheetButtonsFit() {
+        val decor = compose.activity.window.decorView
+        val insets = ViewCompat.getRootWindowInsets(decor)!!
+            .getInsets(WindowInsetsCompat.Type.navigationBars() or WindowInsetsCompat.Type.ime())
+        val bottom = decor.height - insets.bottom
+        for (label in listOf("Отмена", "Сохранить")) {
+            val button = compose.onNodeWithText(label, substring = false).assertIsDisplayed()
+                .fetchSemanticsNode().boundsInWindow
+            assertTrue("$label overlaps Android navigation or keyboard: $button, bottom=$bottom",
+                button.bottom <= bottom && button.top >= 0)
+            assertTrue("$label has been clipped", button.height >= 48 * decor.resources.displayMetrics.density)
+        }
+    }
+
+    @Test fun menuRowsAreSeparateAndCompact() {
+        ready()
+        compose.onNodeWithContentDescription("Меню").performClick()
+        val settings = compose.onNodeWithText("Настройки").assertIsDisplayed().fetchSemanticsNode().boundsInWindow
+        val server = compose.onNodeWithText("Адрес сервера").assertIsDisplayed().fetchSemanticsNode().boundsInWindow
+        val update = compose.onNodeWithContentDescription("Обновить из GitHub").assertIsDisplayed()
+            .fetchSemanticsNode().boundsInWindow
+        assertTrue("Menu rows overlap", settings.bottom < server.top && server.bottom < update.top)
+        assertTrue("Menu is too tall for a phone", update.bottom - settings.top <
+            250 * compose.activity.resources.displayMetrics.density)
+        screenshot("native-menu")
+    }
+
+    @Test fun serverButtonsStayAboveNavigationAndKeyboard() {
+        ready()
+        compose.onNodeWithContentDescription("Меню").performClick()
+        compose.onNodeWithText("Адрес сервера").performClick()
+        compose.waitForIdle()
+        assertSheetButtonsFit()
+        screenshot("native-server")
+        compose.onNodeWithContentDescription("SW411 Control на Nexbox").performClick()
+        compose.waitUntil(10000) {
+            ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+                ?.isVisible(WindowInsetsCompat.Type.ime()) == true
+        }
+        compose.waitForIdle()
+        assertSheetButtonsFit()
+        screenshot("native-server-keyboard")
+        compose.onNodeWithText("Отмена", substring = false).performClick()
+        compose.onNodeWithContentDescription("Меню").assertIsDisplayed()
+    }
+
     @Test fun settingsAreEditedAndSavedInsideApp() {
         ready()
         compose.onNodeWithContentDescription("Меню").performClick()
@@ -119,6 +167,7 @@ class NativePanelTest {
         compose.onNodeWithContentDescription("HDMI 1").performTextReplacement("PlayStation")
         compose.onNodeWithContentDescription("MQTT broker").performScrollTo().performTextReplacement("mqtt.local")
         screenshot("native-settings")
+        assertSheetButtonsFit()
         compose.onNodeWithText("Сохранить", substring = false).performClick()
         compose.waitUntil(10000) { requests.any { it.method == "PUT" && it.path == "/api/settings" } }
         val payload = JSONObject(requests.first { it.method == "PUT" && it.path == "/api/settings" }.body.clone().readUtf8())

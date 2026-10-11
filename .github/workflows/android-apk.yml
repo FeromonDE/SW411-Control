@@ -76,6 +76,29 @@ jobs:
           echo "::warning::Release signing secrets are not configured; building debug APK."
           gradle -p android :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
 
+      - name: Prepare artifact
+        if: always() && (steps.release_signature.outcome == 'success' || steps.debug_build.outcome == 'success')
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          if [ -n "$SW411_SIGNING_KEY_B64" ]; then
+            cp android/app/build/outputs/apk/release/app-release.apk out/SW411-Control-release.apk
+            sha256sum out/SW411-Control-release.apk | tee out/SW411-Control-release.apk.sha256
+          else
+            cp android/app/build/outputs/apk/debug/app-debug.apk out/SW411-Control-debug.apk
+            sha256sum out/SW411-Control-debug.apk | tee out/SW411-Control-debug.apk.sha256
+          fi
+
+      - name: Upload APK
+        if: always() && (steps.release_signature.outcome == 'success' || steps.debug_build.outcome == 'success')
+        uses: actions/upload-artifact@v4
+        with:
+          name: SW411-Control-Android
+          path: out/
+          retention-days: 7
+          if-no-files-found: error
+
       - name: Start Android 15 test device
         shell: bash
         run: |
@@ -111,6 +134,7 @@ jobs:
           adb shell settings put global window_animation_scale 0
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 1
+          adb shell cmd overlay enable-exclusive --category com.android.internal.systemui.navbar.threebutton
           adb shell input keyevent 82
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
@@ -140,27 +164,4 @@ jobs:
           path: native-ui-checks/
           retention-days: 3
           if-no-files-found: ignore
-
-      - name: Prepare artifact
-        if: always() && (steps.release_signature.outcome == 'success' || steps.debug_build.outcome == 'success')
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p out
-          if [ -n "$SW411_SIGNING_KEY_B64" ]; then
-            cp android/app/build/outputs/apk/release/app-release.apk out/SW411-Control-release.apk
-            sha256sum out/SW411-Control-release.apk | tee out/SW411-Control-release.apk.sha256
-          else
-            cp android/app/build/outputs/apk/debug/app-debug.apk out/SW411-Control-debug.apk
-            sha256sum out/SW411-Control-debug.apk | tee out/SW411-Control-debug.apk.sha256
-          fi
-
-      - name: Upload APK
-        if: always() && (steps.release_signature.outcome == 'success' || steps.debug_build.outcome == 'success')
-        uses: actions/upload-artifact@v4
-        with:
-          name: SW411-Control-Android
-          path: out/
-          retention-days: 7
-          if-no-files-found: error
 

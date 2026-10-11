@@ -20,9 +20,11 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -40,6 +42,7 @@ internal fun NativePanel(vm: MainViewModel) {
     var serverOpen by remember { mutableStateOf(false) }
     var confirmation by remember { mutableStateOf<String?>(null) }
     val canControl = !ui.busy && ui.status.connected
+    val sheetOpen = ui.settingsOpen || serverOpen || confirmation != null
     MaterialTheme(colorScheme = darkColorScheme(primary = Cyan, background = Bg,
         surface = Color(0xFF0C1722), onBackground = TextPrimary, onSurface = TextPrimary)) {
         BoxWithConstraints(Modifier.fillMaxSize().background(Bg).drawBehind {
@@ -48,10 +51,10 @@ internal fun NativePanel(vm: MainViewModel) {
                 center = Offset(size.width, -size.height * .1f), radius = 640.dp.toPx()))
             drawRect(Brush.radialGradient(listOf(Color(0xFF4A69FF).copy(alpha = .10f), Color.Transparent),
                 center = Offset(-size.width * .2f, size.height * .1f), radius = 570.dp.toPx()))
-        }.safeDrawingPadding()) {
+        }.safeDrawingPadding().then(if (sheetOpen) Modifier.clearAndSetSemantics {} else Modifier)) {
             val viewportWidth = maxWidth.value
             val wide = viewportWidth >= 560
-            val menuWidth = minOf(310.dp, maxWidth - 32.dp)
+            val menuWidth = minOf(288.dp, maxWidth - 32.dp)
             val padding = if (wide) 24.dp else 16.dp
             Column(Modifier.align(Alignment.TopCenter).widthIn(max = 650.dp).fillMaxWidth()
                 .verticalScroll(rememberScrollState()).padding(horizontal = padding)
@@ -77,7 +80,8 @@ internal fun NativePanel(vm: MainViewModel) {
                                 onDismissRequest = { menuOpen = false }, properties = PopupProperties(focusable = true)) {
                                 Column(Modifier.width(menuWidth)
                                     .shadow(22.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp))
-                                    .background(Color(0xFA0D1822)).border(1.dp, Line, RoundedCornerShape(18.dp)).padding(8.dp)) {
+                                    .background(Color(0xFA0D1822)).border(1.dp, Line, RoundedCornerShape(18.dp)).padding(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 9.dp, bottom = 10.dp),
                                         horizontalArrangement = Arrangement.SpaceBetween) {
                                         Text("SW411 Control", color = Muted, fontSize = 12.sp)
@@ -87,8 +91,8 @@ internal fun NativePanel(vm: MainViewModel) {
                                         enabled = !ui.busy) { menuOpen = false; vm.openSettings() }
                                     MenuAction("Адрес сервера", "Подключение к Nexbox", R.drawable.web_device,
                                         enabled = !ui.busy) { menuOpen = false; serverOpen = true }
-                                    HoldTile("Обновить из GitHub", Modifier.fillMaxWidth(), enabled = !ui.busy,
-                                        radius = 14.dp,
+                                    HoldTile("Обновить из GitHub", Modifier.fillMaxWidth().heightIn(min = 56.dp), enabled = !ui.busy,
+                                        border = Color.Transparent, radius = 10.dp, brush = SolidColor(Color.Transparent),
                                         onHold = { menuOpen = false; vm.updateController() },
                                         onShortPress = { vm.notifyMessage("Для обновления удерживай 1,5 сек.") },
                                         onAccessibleClick = { menuOpen = false; confirmation = "update" }) {
@@ -274,7 +278,7 @@ private fun InputTile(label: String, active: Boolean, enabled: Boolean, modifier
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             WebIcon(R.drawable.web_hdmi, 28.dp, color)
             Text(label, color = color, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, textAlign = TextAlign.Center,
-                maxLines = 2, overflow = TextOverflow.Ellipsis)
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
             Box(Modifier.size(7.dp).background(if (active) Cyan else Color(0xFF58697C), CircleShape))
         }
     }
@@ -302,8 +306,8 @@ private fun ModeCopy(icon: Int, title: String, subtitle: String, action: @Compos
 }
 @Composable
 private fun MenuAction(title: String, subtitle: String, icon: Int, enabled: Boolean, onClick: () -> Unit) {
-    WebTile(Modifier.fillMaxWidth(), enabled, border = Color.Transparent, radius = 14.dp,
-        brush = Brush.linearGradient(listOf(Color(0xB81F2D3B), Color(0xB81F2D3B))), onClick = onClick) {
+    WebTile(Modifier.fillMaxWidth().heightIn(min = 56.dp), enabled, border = Color.Transparent, radius = 10.dp,
+        brush = SolidColor(Color.Transparent), onClick = onClick) {
         MenuCopy(title, subtitle, icon)
     }
 }
@@ -311,11 +315,11 @@ private fun MenuAction(title: String, subtitle: String, icon: Int, enabled: Bool
 private fun MenuCopy(title: String, subtitle: String, icon: Int) {
     Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        WebIcon(icon, 25.dp, Cyan)
+        WebIcon(icon, 22.dp, Cyan)
         Column(Modifier.weight(1f)) {
             Text(title, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(2.dp))
-            Text(subtitle, color = Muted, fontSize = 11.sp)
+            Text(subtitle, color = Muted, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
 }

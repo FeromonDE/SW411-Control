@@ -28,9 +28,12 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -39,22 +42,22 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
-import androidx.compose.ui.window.DialogWindowProvider
 
 @Composable
 internal fun WebSheet(title: String, onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
-    Dialog(onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        val view = LocalView.current
-        SideEffect { (view.parent as? DialogWindowProvider)?.window?.setDimAmount(0f) }
+    // Keep sheets in the Activity window so navigation and keyboard insets come
+    // from the same window as the screen, including older Android/OEM devices.
+    val keyboard = LocalSoftwareKeyboardController.current
+    BackHandler(onBack = onDismiss)
+    DisposableEffect(Unit) { onDispose { keyboard?.hide() } }
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .58f))
-            .safeDrawingPadding().imePadding().clickable(remember { MutableInteractionSource() }, indication = null, onClick = onDismiss)) {
-            Column(Modifier.align(Alignment.BottomCenter).padding(12.dp).widthIn(max = 620.dp).fillMaxWidth()
-                .heightIn(max = maxHeight * .88f).clip(RoundedCornerShape(24.dp))
+            .safeDrawingPadding().imePadding().padding(12.dp)
+            .clickable(remember { MutableInteractionSource() }, indication = null, onClick = onDismiss)) {
+            Column(Modifier.align(Alignment.BottomCenter).widthIn(max = 620.dp).fillMaxWidth()
+                .heightIn(max = maxHeight * .92f).clip(RoundedCornerShape(24.dp))
                 .background(Color(0xFF0C1722)).border(1.dp, Line, RoundedCornerShape(24.dp))
                 .clickable(remember { MutableInteractionSource() }, indication = null, onClick = {})
+                .semantics { paneTitle = title; isTraversalGroup = true }
                 .padding(18.dp)) {
                 Row(Modifier.fillMaxWidth().padding(bottom = 15.dp), verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween) {
@@ -68,7 +71,6 @@ internal fun WebSheet(title: String, onDismiss: () -> Unit, content: @Composable
                 content()
             }
         }
-    }
 }
 
 @Composable
@@ -204,9 +206,11 @@ internal fun ServerSheet(server: String, onDismiss: () -> Unit, onSave: (String)
     var draft by remember { mutableStateOf(server) }
     var invalid by remember { mutableStateOf(false) }
     WebSheet("Адрес сервера", onDismiss) {
-        WebField("SW411 Control на Nexbox", draft, keyboardType = KeyboardType.Uri) { draft = it; invalid = false }
-        Text(if (invalid) "Введи корректный адрес http:// или https://" else "Например: http://192.168.2.159",
-            color = if (invalid) Red else Muted, fontSize = 12.sp, modifier = Modifier.padding(vertical = 12.dp))
+        Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+            WebField("SW411 Control на Nexbox", draft, keyboardType = KeyboardType.Uri) { draft = it; invalid = false }
+            Text(if (invalid) "Введи корректный адрес http:// или https://" else "Например: http://192.168.2.159",
+                color = if (invalid) Red else Muted, fontSize = 12.sp, modifier = Modifier.padding(vertical = 12.dp))
+        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             SheetButton("Отмена", modifier = Modifier.weight(1f), onClick = onDismiss)
             SheetButton("Сохранить", primary = true, modifier = Modifier.weight(1f), onClick = { invalid = !onSave(draft) })
@@ -216,7 +220,8 @@ internal fun ServerSheet(server: String, onDismiss: () -> Unit, onSave: (String)
 @Composable
 internal fun ConfirmSheet(title: String, message: String, onDismiss: () -> Unit, onConfirm: () -> Unit) {
     WebSheet(title, onDismiss) {
-        Text(message, color = Muted, fontSize = 14.sp, modifier = Modifier.padding(bottom = 16.dp))
+        Text(message, color = Muted, fontSize = 14.sp, modifier = Modifier.weight(1f, fill = false)
+            .verticalScroll(rememberScrollState()).padding(bottom = 16.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             SheetButton("Отмена", modifier = Modifier.weight(1f), onClick = onDismiss)
             SheetButton("Подтвердить", primary = true, modifier = Modifier.weight(1f), onClick = onConfirm)

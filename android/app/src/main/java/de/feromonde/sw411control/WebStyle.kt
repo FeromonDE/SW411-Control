@@ -87,7 +87,7 @@ internal fun WebTile(
 @Composable
 internal fun HoldTile(
     label: String, modifier: Modifier = Modifier, enabled: Boolean, border: Color = Line,
-    radius: Dp = 18.dp, onHold: () -> Unit, onShortPress: () -> Unit,
+    radius: Dp = 18.dp, brush: Brush = TileBrush, onHold: () -> Unit, onShortPress: () -> Unit,
     onAccessibleClick: () -> Unit, content: @Composable BoxScope.() -> Unit
 ) {
     val progress = remember { Animatable(0f) }
@@ -98,7 +98,7 @@ internal fun HoldTile(
     val scale by animateFloatAsState(if (pressed) .97f else 1f, label = "holdPress")
     val shape = RoundedCornerShape(radius)
     Box(modifier.graphicsLayer { scaleX = scale; scaleY = scale }.clip(shape)
-        .background(TileBrush).border(1.dp, border, shape)
+        .background(brush).border(1.dp, border, shape)
         .semantics {
             contentDescription = label
             role = Role.Button
@@ -155,7 +155,7 @@ internal fun WebBadge(text: String) {
 internal fun SheetButton(text: String, primary: Boolean = false, enabled: Boolean = true,
     modifier: Modifier = Modifier, onClick: () -> Unit) {
     val brush = if (primary) CyanBrush else Brush.horizontalGradient(listOf(Color(0xFF1B2936), Color(0xFF1B2936)))
-    WebTile(modifier.heightIn(min = 44.dp), enabled, border = Color.Transparent, brush = brush,
+    WebTile(modifier.heightIn(min = 48.dp), enabled, border = Color.Transparent, brush = brush,
         radius = 14.dp, onClick = onClick) {
         Text(text, color = if (primary) Color(0xFF03232A) else Color(0xFFC9D4DF),
             fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(12.dp))
