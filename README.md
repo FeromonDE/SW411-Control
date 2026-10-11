@@ -60,23 +60,27 @@ Default base topic: `sw411`.
 
 ## Android app
 
-The Android app in `android/` displays the controller's actual web panel in Android WebView. It uses the exact same HTML, CSS, settings and REST + SSE behavior as the browser, so controller UI updates appear in the app immediately.
+The Android app in `android/` uses native Jetpack Compose screens. It reproduces the web panel's layout, colors, dimensions, SVG icons and controls without WebView, embedded HTML or browser navigation. It communicates directly with the Nexbox REST + SSE API.
 
 Features:
 
-- Identical web UI, including its layout, icons, animations and hold-to-confirm actions
+- Native implementation of the web panel's visual design, including responsive grids and custom switches
 - HDMI 1–4 with custom names from the server
 - Power, Auto Source and eARC/ARC control
 - Firmware, temperature and current input
 - SSE live-status with automatic reconnect
-- Hold-to-confirm reboot / controller update protection from the web panel
+- 1.5-second hold-to-confirm reboot / controller update protection with a visible progress line
 - Configurable Nexbox address (default `http://192.168.2.159`)
 - Full in-app settings for input names, MQTT and Home Assistant
-- Server address in **⋮ → Адрес сервера**, replacing the PWA installation action
-- Connection recovery screen with retry and address editing when Nexbox is unavailable
+- Server address in **⋮ → Адрес сервера**
+- Connection status, refresh and address editing when Nexbox is unavailable
 - Android Back closes settings or the overflow menu before leaving the app
 
-Version 0.2.0 keeps the saved server address and the same release signing certificate as 0.1.0. The app still requires access to the Nexbox server, just as the browser does; it does not open a USB serial connection from the phone.
+Version 0.3.0 replaces the temporary WebView implementation from 0.2.0, preserves the saved server address and uses the same release certificate. SSE runs while the activity is in the foreground and its idle socket is cancelled when the app leaves the foreground. MQTT passwords and API tokens are not saved in Android preferences. An empty MQTT password keeps the existing server password.
+
+The app controls the existing Nexbox service, which owns the USB connection to the SW411. The phone does not open its own USB serial port.
+
+CI runs API unit tests, Android Lint and native UI tests on an Android 15 emulator. UI tests use a local mock controller, verify source switching and settings saves, check short-press/hold reboot behavior and confirm that the activity contains no WebView. Emulator screenshots and test reports are kept for 3 days in `SW411-Native-UI-Checks`.
 
 GitHub Actions only runs for changes under `android/**`, changes to the Android workflow itself, or manual dispatch. The installable debug APK is uploaded as the `SW411-Control-Android` artifact and kept for 7 days.
 

@@ -56,7 +56,7 @@ jobs:
 
       - name: Build signed release APK
         if: env.SW411_SIGNING_KEY_B64 != ''
-        run: gradle -p android :app:assembleRelease :app:lintRelease --stacktrace
+        run: gradle -p android :app:testDebugUnitTest :app:lintRelease :app:assembleRelease :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
 
       - name: Verify release signature
         if: env.SW411_SIGNING_KEY_B64 != ''
@@ -72,7 +72,58 @@ jobs:
         if: env.SW411_SIGNING_KEY_B64 == ''
         run: |
           echo "::warning::Release signing secrets are not configured; building debug APK."
-          gradle -p android :app:assembleDebug --stacktrace
+          gradle -p android :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
+
+      - name: Start Android 15 test device
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "emulator" "system-images;android-35;google_apis;x86_64"
+          test -e /dev/kvm
+          sudo chmod a+rw /dev/kvm
+          echo no | avdmanager create avd --name sw411-native-ui --package "system-images;android-35;google_apis;x86_64" --device pixel_5
+          nohup "$ANDROID_HOME/emulator/emulator" -avd sw411-native-ui -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect > "$RUNNER_TEMP/sw411-emulator.log" 2>&1 &
+          adb wait-for-device
+          BOOTED=0
+          for attempt in {1..90}; do
+            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+              BOOTED=1
+              break
+            fi
+            sleep 2
+          done
+          test "$BOOTED" = "1"
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 1
+          adb shell input keyevent 82
+
+      - name: Test native screens and controls
+        run: gradle -p android :app:connectedDebugAndroidTest --stacktrace
+
+      - name: Collect native UI checks
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p native-ui-checks
+          if adb get-state >/dev/null 2>&1; then
+            adb pull /sdcard/Android/data/de.feromonde.sw411control/files/screenshots native-ui-checks/ || true
+          fi
+          if [ -d android/app/build/reports ]; then
+            cp -R android/app/build/reports native-ui-checks/reports
+          fi
+          if [ -f "$RUNNER_TEMP/sw411-emulator.log" ]; then
+            cp "$RUNNER_TEMP/sw411-emulator.log" native-ui-checks/emulator.log
+          fi
+
+      - name: Upload native UI checks
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SW411-Native-UI-Checks
+          path: native-ui-checks/
+          retention-days: 3
+          if-no-files-found: ignore
 
       - name: Prepare artifact
         shell: bash
