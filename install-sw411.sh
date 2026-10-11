@@ -935,7 +935,7 @@ cat > /usr/local/sbin/sw411-control-update <<'UPDATER'
 set -euo pipefail
 
 REQ=/run/sw411-control/update.request
-TMP=/tmp/sw411-control-update.$.sh
+TMP=$(mktemp /tmp/sw411-control-update.XXXXXX.sh)
 URL=https://raw.githubusercontent.com/FeromonDE/SW411-Control/main/install-sw411.sh
 
 rm -f "$REQ"
@@ -945,7 +945,7 @@ sleep 1
 curl -fsSL "$URL" -o "$TMP"
 bash -n "$TMP"
 chmod 0700 "$TMP"
-exec /bin/bash "$TMP"
+/bin/bash "$TMP"
 UPDATER
 chmod 0755 /usr/local/sbin/sw411-control-update
 
