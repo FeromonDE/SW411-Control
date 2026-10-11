@@ -10,7 +10,7 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y python3-flask python3-serial nginx curl
+apt-get install -y python3-flask python3-serial python3-paho-mqtt nginx curl
 
 if ! getent passwd sw411 >/dev/null; then
   useradd --system --no-create-home --home-dir /opt/sw411 --shell /usr/sbin/nologin sw411
@@ -24,17 +24,27 @@ cat > /opt/sw411/app.py <<'PYAPP'
 import os
 import re
 import time
+import json
+import queue
+import secrets
+import socket
 import threading
 from collections import deque
 from datetime import datetime
 
 import serial
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, Response, jsonify, request, render_template, stream_with_context
+
+try:
+    import paho.mqtt.client as mqtt
+except Exception:
+    mqtt = None
 
 PORT = os.environ.get("SW411_PORT", "/dev/sw411")
 BAUD = int(os.environ.get("SW411_BAUD", "115200"))
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 UPDATE_REQUEST = "/run/sw411-control/update.request"
+CONFIG_PATH = os.environ.get("SW411_CONFIG", "/var/lib/sw411-control/config.json")
 
 app = Flask(__name__)
 
@@ -42,6 +52,70 @@ _log = deque(maxlen=100)
 _log_lock = threading.Lock()
 _status_lock = threading.Lock()
 _status_cache = {"at": 0.0, "data": None}
+_config_lock = threading.RLock()
+_sse_lock = threading.Lock()
+_sse_clients = set()
+_mqtt_lock = threading.RLock()
+_mqtt_client = None
+_mqtt_connected = False
+
+DEFAULT_CONFIG = {
+    "input_names": ["HDMI 1", "HDMI 2", "HDMI 3", "HDMI 4"],
+    "api_token": "",
+    "mqtt": {
+        "enabled": False,
+        "host": "",
+        "port": 1883,
+        "username": "",
+        "password": "",
+        "base_topic": "sw411",
+        "discovery_prefix": "homeassistant"
+    }
+}
+
+
+def _merge_config(raw):
+    cfg = json.loads(json.dumps(DEFAULT_CONFIG))
+    if isinstance(raw, dict):
+        if isinstance(raw.get("input_names"), list) and len(raw["input_names"]) == 4:
+            cfg["input_names"] = [str(x).strip()[:32] or f"HDMI {i+1}" for i, x in enumerate(raw["input_names"])]
+        if isinstance(raw.get("api_token"), str):
+            cfg["api_token"] = raw["api_token"]
+        if isinstance(raw.get("mqtt"), dict):
+            for key in cfg["mqtt"]:
+                if key in raw["mqtt"]:
+                    cfg["mqtt"][key] = raw["mqtt"][key]
+    if not cfg["api_token"]:
+        cfg["api_token"] = secrets.token_urlsafe(24)
+    cfg["mqtt"]["port"] = int(cfg["mqtt"].get("port") or 1883)
+    return cfg
+
+
+def _save_config_unlocked(cfg):
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    tmp = CONFIG_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(cfg, fh, ensure_ascii=False, indent=2)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, CONFIG_PATH)
+
+
+def load_config():
+    with _config_lock:
+        raw = {}
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            add_log(f"Ошибка чтения настроек: {e}", "error")
+        cfg = _merge_config(raw)
+        _save_config_unlocked(cfg)
+        return cfg
+
+
+_config = None
 
 
 def add_log(message, level="info"):
@@ -51,6 +125,22 @@ def add_log(message, level="info"):
             "message": message,
             "level": level,
         })
+
+
+_config = load_config()
+
+
+def config_snapshot(include_secret=False):
+    with _config_lock:
+        cfg = json.loads(json.dumps(_config))
+    if not include_secret:
+        cfg["mqtt"]["password"] = ""
+    return cfg
+
+
+def input_names():
+    with _config_lock:
+        return list(_config["input_names"])
 
 
 class SW411Serial:
@@ -179,7 +269,10 @@ def read_status(force=False):
             "input": None,
             "power": None,
             "auto_switch": None,
+            "earc": None,
             "temperature": None,
+            "input_names": input_names(),
+            "audio_edid_control": False,
             "error": None,
             "raw": {},
         }
@@ -194,6 +287,7 @@ def read_status(force=False):
                 ("input", "r in source!"),
                 ("power", "r power!"),
                 ("auto_switch", "r auto switch!"),
+                ("earc", "r earc!"),
                 ("temperature", "r temperature!"),
             ):
                 try:
@@ -204,7 +298,12 @@ def read_status(force=False):
             data["input"] = _input(data["raw"].get("input"))
             data["power"] = _bool(data["raw"].get("power"))
             data["auto_switch"] = _bool(data["raw"].get("auto_switch"))
+            data["earc"] = _bool(data["raw"].get("earc"))
             data["temperature"] = _temperature(data["raw"].get("temperature"))
+            if data["input"] in (1, 2, 3, 4):
+                data["input_name"] = data["input_names"][data["input"] - 1]
+            else:
+                data["input_name"] = None
         except Exception as e:
             data["error"] = str(e)
             data["connected"] = False
@@ -212,6 +311,292 @@ def read_status(force=False):
         _status_cache["at"] = now
         _status_cache["data"] = data
         return data
+
+
+def _state_for_publish():
+    with _status_lock:
+        state = dict(_status_cache.get("data") or {})
+    state["input_names"] = input_names()
+    if state.get("input") in (1, 2, 3, 4):
+        state["input_name"] = state["input_names"][state["input"] - 1]
+    return state
+
+
+def broadcast_state(state=None):
+    state = state or _state_for_publish()
+    payload = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+    dead = []
+    with _sse_lock:
+        for q in list(_sse_clients):
+            try:
+                q.put_nowait(payload)
+            except Exception:
+                dead.append(q)
+        for q in dead:
+            _sse_clients.discard(q)
+    mqtt_publish_state(state)
+
+
+def schedule_confirm(delay=0.65):
+    def worker():
+        time.sleep(delay)
+        try:
+            state = read_status(force=True)
+            broadcast_state(state)
+        except Exception:
+            pass
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def _device_info(state=None):
+    state = state or _state_for_publish()
+    return {
+        "identifiers": ["sw411-control"],
+        "name": "FeinTech SW411",
+        "manufacturer": "FeinTech",
+        "model": "SW411",
+        "sw_version": state.get("firmware") or "unknown"
+    }
+
+
+def mqtt_publish_discovery():
+    global _mqtt_client
+    with _mqtt_lock:
+        client = _mqtt_client
+        connected = _mqtt_connected
+        cfg = config_snapshot(include_secret=True)
+    if not client or not connected or not cfg["mqtt"]["enabled"]:
+        return
+
+    m = cfg["mqtt"]
+    base = m["base_topic"].rstrip("/")
+    disc = m["discovery_prefix"].rstrip("/")
+    names = cfg["input_names"]
+    dev = _device_info()
+
+    entities = {
+        f"{disc}/select/sw411/input/config": {
+            "name": "Input",
+            "unique_id": "sw411_input",
+            "state_topic": f"{base}/status",
+            "value_template": "{{ value_json.input_name }}",
+            "command_topic": f"{base}/input/set",
+            "options": names,
+            "availability_topic": f"{base}/availability",
+            "device": dev
+        },
+        f"{disc}/switch/sw411/auto_switch/config": {
+            "name": "Auto Source",
+            "unique_id": "sw411_auto_switch",
+            "state_topic": f"{base}/status",
+            "value_template": "{{ 'ON' if value_json.auto_switch else 'OFF' }}",
+            "command_topic": f"{base}/auto/set",
+            "availability_topic": f"{base}/availability",
+            "device": dev
+        },
+        f"{disc}/switch/sw411/earc/config": {
+            "name": "eARC",
+            "unique_id": "sw411_earc",
+            "state_topic": f"{base}/status",
+            "value_template": "{{ 'ON' if value_json.earc else 'OFF' }}",
+            "command_topic": f"{base}/earc/set",
+            "availability_topic": f"{base}/availability",
+            "device": dev
+        },
+        f"{disc}/switch/sw411/power/config": {
+            "name": "Power",
+            "unique_id": "sw411_power",
+            "state_topic": f"{base}/status",
+            "value_template": "{{ 'ON' if value_json.power else 'OFF' }}",
+            "command_topic": f"{base}/power/set",
+            "availability_topic": f"{base}/availability",
+            "device": dev
+        },
+        f"{disc}/sensor/sw411/temperature/config": {
+            "name": "Temperature",
+            "unique_id": "sw411_temperature",
+            "state_topic": f"{base}/status",
+            "value_template": "{{ value_json.temperature }}",
+            "device_class": "temperature",
+            "unit_of_measurement": "°C",
+            "availability_topic": f"{base}/availability",
+            "device": dev
+        },
+        f"{disc}/sensor/sw411/firmware/config": {
+            "name": "Firmware",
+            "unique_id": "sw411_firmware",
+            "state_topic": f"{base}/status",
+            "value_template": "{{ value_json.firmware }}",
+            "availability_topic": f"{base}/availability",
+            "device": dev
+        },
+        f"{disc}/button/sw411/reboot/config": {
+            "name": "Reboot",
+            "unique_id": "sw411_reboot",
+            "command_topic": f"{base}/reboot/set",
+            "payload_press": "PRESS",
+            "device_class": "restart",
+            "availability_topic": f"{base}/availability",
+            "device": dev
+        }
+    }
+
+    for topic, payload in entities.items():
+        client.publish(topic, json.dumps(payload, ensure_ascii=False), qos=0, retain=True)
+
+
+def mqtt_publish_state(state=None):
+    with _mqtt_lock:
+        client = _mqtt_client
+        connected = _mqtt_connected
+        cfg = config_snapshot(include_secret=True)
+    if not client or not connected or not cfg["mqtt"]["enabled"]:
+        return
+    base = cfg["mqtt"]["base_topic"].rstrip("/")
+    state = state or _state_for_publish()
+    client.publish(f"{base}/status", json.dumps(state, ensure_ascii=False), qos=0, retain=True)
+    client.publish(f"{base}/availability", "online" if state.get("connected") else "offline", qos=0, retain=True)
+
+
+def set_input(source):
+    sw.command(f"s in source {source}!", timeout=0.12, expect_reply=False)
+    invalidate_status()
+    add_log(f"Переключение на {input_names()[source - 1]}")
+    schedule_confirm()
+
+
+def set_auto(enabled):
+    sw.command(f"s auto switch {1 if enabled else 0}!", timeout=0.12, expect_reply=False)
+    invalidate_status()
+    add_log("Автопереключение включено" if enabled else "Автопереключение выключено")
+    schedule_confirm()
+
+
+def set_earc(enabled):
+    sw.command(f"s earc {1 if enabled else 0}!", timeout=0.12, expect_reply=False)
+    invalidate_status()
+    add_log("eARC включён" if enabled else "eARC выключен")
+    schedule_confirm()
+
+
+def set_power(enabled):
+    state = read_status(force=True)
+    current = state.get("power")
+    if current is None or bool(current) != bool(enabled):
+        sw.command("power z!", timeout=0.12, expect_reply=False)
+        invalidate_status()
+        add_log("Питание включается" if enabled else "Питание выключается")
+        schedule_confirm(0.8)
+
+
+def reboot_device():
+    sw.command("reboot!", timeout=0.2, expect_reply=False)
+    sw.close()
+    invalidate_status()
+    add_log("SW411 перезагружается", "warn")
+    schedule_confirm(1.8)
+
+
+def _mqtt_on_connect(client, userdata, flags, rc):
+    global _mqtt_connected
+    _mqtt_connected = (rc == 0)
+    if not _mqtt_connected:
+        add_log(f"MQTT: ошибка подключения rc={rc}", "error")
+        return
+    cfg = config_snapshot(include_secret=True)
+    base = cfg["mqtt"]["base_topic"].rstrip("/")
+    for suffix in ("input/set", "auto/set", "earc/set", "power/set", "reboot/set"):
+        client.subscribe(f"{base}/{suffix}")
+    client.publish(f"{base}/availability", "online", retain=True)
+    mqtt_publish_discovery()
+    mqtt_publish_state()
+    add_log("MQTT подключён")
+
+
+def _mqtt_on_disconnect(client, userdata, rc):
+    global _mqtt_connected
+    _mqtt_connected = False
+
+
+def _mqtt_on_message(client, userdata, msg):
+    try:
+        cfg = config_snapshot(include_secret=True)
+        base = cfg["mqtt"]["base_topic"].rstrip("/")
+        suffix = msg.topic[len(base) + 1:] if msg.topic.startswith(base + "/") else ""
+        payload = msg.payload.decode("utf-8", errors="replace").strip()
+
+        if suffix == "input/set":
+            names = cfg["input_names"]
+            if payload in names:
+                set_input(names.index(payload) + 1)
+            elif payload.isdigit() and int(payload) in (1, 2, 3, 4):
+                set_input(int(payload))
+        elif suffix == "auto/set":
+            set_auto(payload.upper() == "ON")
+        elif suffix == "earc/set":
+            set_earc(payload.upper() == "ON")
+        elif suffix == "power/set":
+            set_power(payload.upper() == "ON")
+        elif suffix == "reboot/set" and payload.upper() in ("PRESS", "REBOOT"):
+            reboot_device()
+    except Exception as e:
+        add_log(f"MQTT command error: {e}", "error")
+
+
+def mqtt_restart():
+    global _mqtt_client, _mqtt_connected
+    with _mqtt_lock:
+        old = _mqtt_client
+        _mqtt_client = None
+        _mqtt_connected = False
+    if old:
+        try:
+            old.loop_stop()
+            old.disconnect()
+        except Exception:
+            pass
+
+    cfg = config_snapshot(include_secret=True)
+    m = cfg["mqtt"]
+    if not m["enabled"] or not m["host"] or mqtt is None:
+        return
+
+    try:
+        client = mqtt.Client(client_id=f"sw411-{socket.gethostname()}", clean_session=True)
+        if m.get("username"):
+            client.username_pw_set(m["username"], m.get("password") or None)
+        client.on_connect = _mqtt_on_connect
+        client.on_disconnect = _mqtt_on_disconnect
+        client.on_message = _mqtt_on_message
+        client.will_set(f"{m['base_topic'].rstrip('/')}/availability", "offline", retain=True)
+        with _mqtt_lock:
+            _mqtt_client = client
+        client.connect_async(m["host"], int(m["port"]), 60)
+        client.loop_start()
+    except Exception as e:
+        add_log(f"MQTT start error: {e}", "error")
+
+
+def monitor_loop():
+    previous = None
+    while True:
+        try:
+            state = read_status(force=True)
+            compact = {
+                k: state.get(k)
+                for k in ("connected", "firmware", "input", "power", "auto_switch", "earc", "temperature")
+            }
+            compact["input_names"] = state.get("input_names")
+            if compact != previous:
+                previous = compact
+                broadcast_state(state)
+        except Exception as e:
+            add_log(f"Status monitor: {e}", "error")
+
+        with _sse_lock:
+            active_clients = len(_sse_clients)
+        cfg = config_snapshot(include_secret=True)
+        time.sleep(5 if active_clients or cfg["mqtt"]["enabled"] else 15)
 
 
 @app.get("/")
@@ -236,10 +621,8 @@ def api_input(source):
     if source not in (1, 2, 3, 4):
         return jsonify(ok=False, error="Недопустимый HDMI-вход"), 400
     try:
-        sw.command(f"s in source {source}!", timeout=0.12, expect_reply=False)
-        invalidate_status()
-        add_log(f"Переключение на HDMI {source}")
-        return jsonify(ok=True, input=source)
+        set_input(source)
+        return jsonify(ok=True, input=source, name=input_names()[source - 1])
     except Exception as e:
         add_log(f"Ошибка переключения HDMI {source}: {e}", "error")
         return jsonify(ok=False, error=str(e)), 500
@@ -252,22 +635,34 @@ def api_auto():
     if not isinstance(enabled, bool):
         return jsonify(ok=False, error="Поле enabled должно быть true/false"), 400
     try:
-        sw.command(f"s auto switch {1 if enabled else 0}!", timeout=0.12, expect_reply=False)
-        invalidate_status()
-        add_log("Автопереключение включено" if enabled else "Автопереключение выключено")
+        set_auto(enabled)
         return jsonify(ok=True, auto_switch=enabled)
     except Exception as e:
         add_log(f"Ошибка режима автопереключения: {e}", "error")
         return jsonify(ok=False, error=str(e)), 500
 
 
+@app.post("/api/earc")
+def api_earc():
+    payload = request.get_json(silent=True) or {}
+    enabled = payload.get("enabled")
+    if not isinstance(enabled, bool):
+        return jsonify(ok=False, error="Поле enabled должно быть true/false"), 400
+    try:
+        set_earc(enabled)
+        return jsonify(ok=True, earc=enabled)
+    except Exception as e:
+        add_log(f"Ошибка eARC: {e}", "error")
+        return jsonify(ok=False, error=str(e)), 500
+
+
 @app.post("/api/power/toggle")
 def api_power_toggle():
     try:
-        sw.command("power z!", timeout=0.12, expect_reply=False)
-        invalidate_status()
-        add_log("Команда питания отправлена")
-        return jsonify(ok=True)
+        state = read_status(force=True)
+        enabled = not bool(state.get("power"))
+        set_power(enabled)
+        return jsonify(ok=True, power=enabled)
     except Exception as e:
         add_log(f"Ошибка питания: {e}", "error")
         return jsonify(ok=False, error=str(e)), 500
@@ -276,14 +671,160 @@ def api_power_toggle():
 @app.post("/api/reboot")
 def api_reboot():
     try:
-        sw.command("reboot!", timeout=0.2, expect_reply=False)
-        sw.close()
-        invalidate_status()
-        add_log("SW411 перезагружается", "warn")
+        reboot_device()
         return jsonify(ok=True)
     except Exception as e:
         add_log(f"Ошибка перезагрузки: {e}", "error")
         return jsonify(ok=False, error=str(e)), 500
+
+
+@app.get("/api/events")
+def api_events():
+    q = queue.Queue(maxsize=8)
+    with _sse_lock:
+        _sse_clients.add(q)
+
+    @stream_with_context
+    def generate():
+        try:
+            initial = json.dumps(read_status(force=True), ensure_ascii=False, separators=(",", ":"))
+            yield f"data: {initial}\n\n"
+            while True:
+                try:
+                    payload = q.get(timeout=15)
+                    yield f"data: {payload}\n\n"
+                except queue.Empty:
+                    yield ": keepalive\n\n"
+        finally:
+            with _sse_lock:
+                _sse_clients.discard(q)
+
+    return Response(generate(), mimetype="text/event-stream", headers={"X-Accel-Buffering": "no"})
+
+
+@app.get("/api/settings")
+def api_settings():
+    cfg = config_snapshot(include_secret=False)
+    cfg["mqtt"]["connected"] = bool(_mqtt_connected)
+    return jsonify(cfg)
+
+
+@app.put("/api/settings")
+def api_settings_put():
+    payload = request.get_json(silent=True) or {}
+    with _config_lock:
+        old_password = _config["mqtt"].get("password", "")
+        merged = _merge_config({**_config, **payload})
+        if isinstance(payload.get("mqtt"), dict):
+            mqtt_payload = payload["mqtt"]
+            merged["mqtt"].update(_config["mqtt"])
+            for key in ("enabled", "host", "port", "username", "base_topic", "discovery_prefix"):
+                if key in mqtt_payload:
+                    merged["mqtt"][key] = mqtt_payload[key]
+            new_password = mqtt_payload.get("password")
+            if isinstance(new_password, str) and new_password:
+                merged["mqtt"]["password"] = new_password
+            else:
+                merged["mqtt"]["password"] = old_password
+        _config.clear()
+        _config.update(merged)
+        _save_config_unlocked(_config)
+
+    add_log("Настройки сохранены")
+    invalidate_status()
+    mqtt_restart()
+    mqtt_publish_discovery()
+    broadcast_state()
+    return api_settings()
+
+
+def _ha_authorized():
+    auth = request.headers.get("Authorization", "")
+    with _config_lock:
+        token = _config["api_token"]
+    return auth == f"Bearer {token}"
+
+
+@app.get("/api/ha/state")
+def ha_state():
+    if not _ha_authorized():
+        return jsonify(error="unauthorized"), 401
+    return jsonify(read_status(force=True))
+
+
+@app.post("/api/ha/input/<int:source>")
+def ha_input(source):
+    if not _ha_authorized():
+        return jsonify(error="unauthorized"), 401
+    if source not in (1, 2, 3, 4):
+        return jsonify(error="bad input"), 400
+    set_input(source)
+    return jsonify(ok=True)
+
+
+@app.post("/api/ha/auto")
+def ha_auto():
+    if not _ha_authorized():
+        return jsonify(error="unauthorized"), 401
+    enabled = bool((request.get_json(silent=True) or {}).get("enabled"))
+    set_auto(enabled)
+    return jsonify(ok=True)
+
+
+@app.post("/api/ha/earc")
+def ha_earc():
+    if not _ha_authorized():
+        return jsonify(error="unauthorized"), 401
+    enabled = bool((request.get_json(silent=True) or {}).get("enabled"))
+    set_earc(enabled)
+    return jsonify(ok=True)
+
+
+@app.post("/api/ha/power")
+def ha_power():
+    if not _ha_authorized():
+        return jsonify(error="unauthorized"), 401
+    enabled = bool((request.get_json(silent=True) or {}).get("enabled"))
+    set_power(enabled)
+    return jsonify(ok=True)
+
+
+@app.post("/api/ha/reboot")
+def ha_reboot():
+    if not _ha_authorized():
+        return jsonify(error="unauthorized"), 401
+    reboot_device()
+    return jsonify(ok=True)
+
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    payload = {
+        "name": "SW411 Control",
+        "short_name": "SW411",
+        "start_url": "/",
+        "scope": "/",
+        "display": "standalone",
+        "background_color": "#071019",
+        "theme_color": "#081018",
+        "icons": [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}]
+    }
+    return Response(json.dumps(payload, ensure_ascii=False), mimetype="application/manifest+json")
+
+
+@app.get("/sw.js")
+def service_worker():
+    js = """const C='sw411-v0.4.0';
+self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(C).then(c=>c.addAll(['/','/manifest.webmanifest','/icon.svg'])))});
+self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==C).map(k=>caches.delete(k)))));self.clients.claim()});
+self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;const u=new URL(e.request.url);if(u.pathname.startsWith('/api/'))return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request).then(r=>r||caches.match('/'))))});"""
+    return Response(js, mimetype="application/javascript", headers={"Service-Worker-Allowed": "/"})
+
+
+@app.get("/icon.svg")
+def icon_svg():
+    svg = """<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop stop-color='#163047'/><stop offset='1' stop-color='#071019'/></linearGradient></defs><rect width='512' height='512' rx='112' fill='url(#g)'/><rect x='96' y='170' width='320' height='172' rx='42' fill='none' stroke='#e9f7ff' stroke-width='24'/><circle cx='160' cy='256' r='14' fill='#22d3ee'/><circle cx='352' cy='256' r='14' fill='#22e39a'/></svg>"""
+    return Response(svg, mimetype="image/svg+xml")
 
 
 @app.get("/api/app")
@@ -326,6 +867,8 @@ def headers(response):
 
 
 add_log("SW411 Control запущен")
+mqtt_restart()
+threading.Thread(target=monitor_loop, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=8787, threaded=True)
@@ -991,6 +1534,9 @@ Restart=on-failure
 RestartSec=2
 RuntimeDirectory=sw411-control
 RuntimeDirectoryMode=0750
+StateDirectory=sw411-control
+StateDirectoryMode=0750
+Environment=SW411_CONFIG=/var/lib/sw411-control/config.json
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
