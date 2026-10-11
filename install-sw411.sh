@@ -604,6 +604,7 @@ let busy = false;
 let toastTimer;
 let pendingInput = null;
 let pendingInputUntil = 0;
+let statusEpoch = 0;
 
 function toast(msg, error=false){
   const t=$("#toast");
@@ -660,10 +661,14 @@ function render(s){
 }
 
 async function refresh(force=false){
+  const epoch = statusEpoch;
   try{
-    render(await api("/api/status"+(force?"?force=1":"")));
+    const status = await api("/api/status"+(force?"?force=1":""));
+    if(epoch !== statusEpoch) return;
+    render(status);
     await loadLogs();
   }catch(e){
+    if(epoch !== statusEpoch) return;
     render({connected:false,error:e.message,port:"/dev/sw411"});
   }
 }
@@ -686,22 +691,38 @@ function esc(s){
   return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
 }
 
-$$(".input-btn").forEach(btn=>btn.addEventListener("click",async()=>{
+$(".input-btn").forEach(btn=>btn.addEventListener("click",async()=>{
   if(busy)return;
+  const n=Number(btn.dataset.input);
+
+  // Invalidate any status request that started before this tap.
+  statusEpoch++;
+
+  // Optimistic UI: highlight the requested input immediately, before
+  // waiting for the serial command to get the lock / reach the SW411.
+  pendingInput=n;
+  pendingInputUntil=Date.now()+4000;
+  current={...current,input:n};
+  render(current);
+
   setBusy(true);
   try{
-    const n=Number(btn.dataset.input);
     await api(`/api/input/${n}`,{method:"POST"});
-    pendingInput=n;
-    pendingInputUntil=Date.now()+2500;
-    current.input=n;
-    render(current);
     toast(`HDMI ${n} выбран`);
     loadLogs();
-    setTimeout(()=>refresh(true),450);
-    setTimeout(()=>refresh(true),1100);
-  }catch(e){toast(e.message,true)}
-  finally{setBusy(false)}
+
+    // Confirm the real state after the hardware has had time to switch.
+    setTimeout(()=>refresh(true),550);
+    setTimeout(()=>refresh(true),1300);
+  }catch(e){
+    pendingInput=null;
+    pendingInputUntil=0;
+    statusEpoch++;
+    toast(e.message,true);
+    refresh(true);
+  }finally{
+    setBusy(false);
+  }
 }));
 
 $("#autoSwitch").addEventListener("click",async()=>{
