@@ -602,6 +602,8 @@ const $$ = s => [...document.querySelectorAll(s)];
 let current = {};
 let busy = false;
 let toastTimer;
+let pendingInput = null;
+let pendingInputUntil = 0;
 
 function toast(msg, error=false){
   const t=$("#toast");
@@ -624,7 +626,21 @@ async function api(url, options={}){
 }
 
 function render(s){
-  current=s||{};
+  s = {...(s||{})};
+
+  if(pendingInput !== null){
+    if(s.input === pendingInput){
+      pendingInput = null;
+      pendingInputUntil = 0;
+    }else if(Date.now() < pendingInputUntil){
+      s.input = pendingInput;
+    }else{
+      pendingInput = null;
+      pendingInputUntil = 0;
+    }
+  }
+
+  current=s;
   const online=!!s.connected;
   $("#connDot").classList.toggle("online",online);
   $("#connTitle").textContent=online?"Подключено":"Нет связи";
@@ -676,11 +692,14 @@ $$(".input-btn").forEach(btn=>btn.addEventListener("click",async()=>{
   try{
     const n=Number(btn.dataset.input);
     await api(`/api/input/${n}`,{method:"POST"});
+    pendingInput=n;
+    pendingInputUntil=Date.now()+2500;
     current.input=n;
     render(current);
     toast(`HDMI ${n} выбран`);
     loadLogs();
-    setTimeout(()=>refresh(true),350);
+    setTimeout(()=>refresh(true),450);
+    setTimeout(()=>refresh(true),1100);
   }catch(e){toast(e.message,true)}
   finally{setBusy(false)}
 }));
