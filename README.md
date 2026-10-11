@@ -76,3 +76,25 @@ Features:
 GitHub Actions only runs for changes under `android/**`, changes to the Android workflow itself, or manual dispatch. The installable debug APK is uploaded as the `SW411-Control-Android` artifact and kept for 7 days.
 
 Workflow: `.github/workflows/android-apk.yml`.
+
+
+## Android release signing
+
+The Android app uses a dedicated stable release certificate. The private signing key is intentionally **not** stored in this public repository.
+
+Public certificate:
+
+`android/signing/SW411-Control-release-cert.pem`
+
+Certificate SHA-256 fingerprint:
+
+`0E:35:9C:7D:8F:31:19:6C:A4:2E:34:65:66:FC:50:FF:54:A1:F7:FF:08:D3:98:C0:3B:F4:7A:3B:CF:CA:39:B1`
+
+GitHub Actions expects these repository secrets:
+
+- `SW411_SIGNING_KEY_B64`
+- `SW411_SIGNING_STORE_PASSWORD`
+- `SW411_SIGNING_KEY_ALIAS`
+- `SW411_SIGNING_KEY_PASSWORD`
+
+When the secrets are present, the workflow builds `SW411-Control-release.apk` and verifies its APK signature with `apksigner`. Without them, CI falls back to a debug APK.
