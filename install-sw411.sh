@@ -81,7 +81,7 @@ class SW411Serial:
                     pass
             self.ser = None
 
-    def command(self, cmd, timeout=0.9, expect_reply=True):
+    def command(self, cmd, timeout=0.35, expect_reply=True):
         with self.lock:
             try:
                 self._ensure_open()
@@ -101,7 +101,7 @@ class SW411Serial:
                     if chunk:
                         buf.extend(chunk)
                         last_rx = time.monotonic()
-                    elif buf and last_rx and (time.monotonic() - last_rx) >= 0.12:
+                    elif buf and last_rx and (time.monotonic() - last_rx) >= 0.035:
                         break
 
                 return bytes(buf).decode("utf-8", errors="replace").strip("\x00\r\n \t")
@@ -234,12 +234,10 @@ def api_input(source):
     if source not in (1, 2, 3, 4):
         return jsonify(ok=False, error="Недопустимый HDMI-вход"), 400
     try:
-        raw = sw.command(f"s in source {source}!")
+        sw.command(f"s in source {source}!", timeout=0.12, expect_reply=False)
         invalidate_status()
-        time.sleep(0.12)
-        status = read_status(force=True)
         add_log(f"Переключение на HDMI {source}")
-        return jsonify(ok=True, reply=raw, status=status)
+        return jsonify(ok=True, input=source)
     except Exception as e:
         add_log(f"Ошибка переключения HDMI {source}: {e}", "error")
         return jsonify(ok=False, error=str(e)), 500
@@ -252,12 +250,10 @@ def api_auto():
     if not isinstance(enabled, bool):
         return jsonify(ok=False, error="Поле enabled должно быть true/false"), 400
     try:
-        raw = sw.command(f"s auto switch {1 if enabled else 0}!")
+        sw.command(f"s auto switch {1 if enabled else 0}!", timeout=0.12, expect_reply=False)
         invalidate_status()
-        time.sleep(0.12)
-        status = read_status(force=True)
         add_log("Автопереключение включено" if enabled else "Автопереключение выключено")
-        return jsonify(ok=True, reply=raw, status=status)
+        return jsonify(ok=True, auto_switch=enabled)
     except Exception as e:
         add_log(f"Ошибка режима автопереключения: {e}", "error")
         return jsonify(ok=False, error=str(e)), 500
@@ -266,12 +262,10 @@ def api_auto():
 @app.post("/api/power/toggle")
 def api_power_toggle():
     try:
-        raw = sw.command("power z!")
+        sw.command("power z!", timeout=0.12, expect_reply=False)
         invalidate_status()
-        time.sleep(0.18)
-        status = read_status(force=True)
         add_log("Команда питания отправлена")
-        return jsonify(ok=True, reply=raw, status=status)
+        return jsonify(ok=True)
     except Exception as e:
         add_log(f"Ошибка питания: {e}", "error")
         return jsonify(ok=False, error=str(e)), 500
@@ -681,10 +675,12 @@ $$(".input-btn").forEach(btn=>btn.addEventListener("click",async()=>{
   setBusy(true);
   try{
     const n=Number(btn.dataset.input);
-    const r=await api(`/api/input/${n}`,{method:"POST"});
-    render(r.status);
+    await api(`/api/input/${n}`,{method:"POST"});
+    current.input=n;
+    render(current);
     toast(`HDMI ${n} выбран`);
-    await loadLogs();
+    loadLogs();
+    setTimeout(()=>refresh(true),350);
   }catch(e){toast(e.message,true)}
   finally{setBusy(false)}
 }));
@@ -694,10 +690,12 @@ $("#autoSwitch").addEventListener("click",async()=>{
   setBusy(true);
   try{
     const enabled=current.auto_switch!==true;
-    const r=await api("/api/auto",{method:"POST",body:JSON.stringify({enabled})});
-    render(r.status);
+    await api("/api/auto",{method:"POST",body:JSON.stringify({enabled})});
+    current.auto_switch=enabled;
+    render(current);
     toast(enabled?"Автопереключение включено":"Ручной режим включён");
-    await loadLogs();
+    loadLogs();
+    setTimeout(()=>refresh(true),350);
   }catch(e){toast(e.message,true)}
   finally{setBusy(false)}
 });
@@ -706,10 +704,12 @@ $("#powerBtn").addEventListener("click",async()=>{
   if(busy)return;
   setBusy(true);
   try{
-    const r=await api("/api/power/toggle",{method:"POST"});
-    render(r.status);
+    await api("/api/power/toggle",{method:"POST"});
+    if(current.power!==null && current.power!==undefined) current.power=!current.power;
+    render(current);
     toast("Команда питания выполнена");
-    await loadLogs();
+    loadLogs();
+    setTimeout(()=>refresh(true),500);
   }catch(e){toast(e.message,true)}
   finally{setBusy(false)}
 });
@@ -735,7 +735,7 @@ $("#refreshBtn").addEventListener("click",async()=>{
 });
 
 refresh(true);
-setInterval(()=>{if(!busy && document.visibilityState==="visible")refresh(false)},5000);
+setInterval(()=>{if(!busy && document.visibilityState==="visible")refresh(false)},2000);
 </script>
 </body>
 </html>
