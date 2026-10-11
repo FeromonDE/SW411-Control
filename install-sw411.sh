@@ -1350,19 +1350,21 @@ cat > /opt/sw411/templates/index.html <<'HTML'
 <script>
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
+
 let current = {};
 let busy = false;
 let toastTimer;
 let pendingInput = null;
 let pendingInputUntil = 0;
-let statusEpoch = 0;
+let eventSource = null;
+let deferredInstallPrompt = null;
 
 function toast(msg, error=false){
   const t=$("#toast");
   t.textContent=msg;
   t.className="toast show"+(error?" error":"");
   clearTimeout(toastTimer);
-  toastTimer=setTimeout(()=>t.className="toast",2600);
+  toastTimer=setTimeout(()=>t.className="toast",2800);
 }
 
 function setBusy(v){
@@ -1371,28 +1373,42 @@ function setBusy(v){
 }
 
 async function api(url, options={}){
-  const r=await fetch(url,{cache:"no-store",headers:{"Content-Type":"application/json"},...options});
+  const r=await fetch(url,{
+    cache:"no-store",
+    headers:{"Content-Type":"application/json", ...(options.headers||{})},
+    ...options
+  });
   const data=await r.json().catch(()=>({}));
   if(!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
   return data;
 }
 
 function render(s, fromServer=false){
-  s = {...(s||{})};
+  s={...(s||{})};
 
   if(pendingInput !== null){
     if(fromServer && s.input === pendingInput){
-      pendingInput = null;
-      pendingInputUntil = 0;
+      pendingInput=null;
+      pendingInputUntil=0;
     }else if(Date.now() < pendingInputUntil){
-      s.input = pendingInput;
+      s.input=pendingInput;
     }else{
-      pendingInput = null;
-      pendingInputUntil = 0;
+      pendingInput=null;
+      pendingInputUntil=0;
     }
   }
 
   current=s;
+  const names=Array.isArray(s.input_names)&&s.input_names.length===4
+    ? s.input_names
+    : ["HDMI 1","HDMI 2","HDMI 3","HDMI 4"];
+
+  $$(".input-btn").forEach((b,i)=>{
+    b.classList.toggle("active",Number(b.dataset.input)===s.input);
+    const label=b.querySelector(".input-label");
+    if(label) label.textContent=names[i];
+  });
+
   const online=!!s.connected;
   $("#connDot").classList.toggle("online",online);
   $("#connTitle").textContent=online?"Подключено":"Нет связи";
@@ -1400,27 +1416,25 @@ function render(s, fromServer=false){
   $("#connSub").textContent=online?"Устройство готово к работе":(s.error||"SW411 не найден");
   $("#port").textContent=s.port||"/dev/sw411";
   $("#fw").textContent=s.firmware||"—";
-  $("#activeInput").textContent=s.input?`HDMI ${s.input}`:"—";
+  $("#activeInput").textContent=s.input ? (names[s.input-1]||`HDMI ${s.input}`) : "—";
   $("#temp").textContent=(s.temperature!==null&&s.temperature!==undefined)?`${s.temperature} °C`:"—";
-  $$(".input-btn").forEach(b=>b.classList.toggle("active",Number(b.dataset.input)===s.input));
 
   const auto=s.auto_switch===true;
   $("#autoSwitch").classList.toggle("on",auto);
-  $("#manualBadge").textContent=s.auto_switch===null?"—":(auto?"ВЫКЛ":"ВКЛ");
+  $("#manualBadge").textContent=s.auto_switch===null||s.auto_switch===undefined?"—":(auto?"ВЫКЛ":"ВКЛ");
+
+  const earc=s.earc===true;
+  $("#earcSwitch").classList.toggle("on",earc);
+
   $("#powerText").textContent=s.power===true?"Выключить":s.power===false?"Включить":"Питание";
-  $("#lastUpdate").textContent=new Date().toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
 }
 
 async function refresh(force=false){
-  const epoch = statusEpoch;
   try{
-    const status = await api("/api/status"+(force?"?force=1":""));
-    if(epoch !== statusEpoch) return;
-    render(status, true);
-    await loadLogs();
+    const status=await api("/api/status"+(force?"?force=1":""));
+    render(status,true);
   }catch(e){
-    if(epoch !== statusEpoch) return;
-    render({connected:false,error:e.message,port:"/dev/sw411"});
+    render({connected:false,error:e.message,port:"/dev/sw411"},true);
   }
 }
 
@@ -1428,7 +1442,7 @@ async function loadLogs(){
   try{
     const list=await api("/api/logs");
     const el=$("#logs");
-    if(!list.length) return;
+    if(!list.length)return;
     el.innerHTML=list.slice(0,8).map(x=>`
       <div class="log">
         <i class="log-dot ${x.level||"info"}"></i>
@@ -1442,33 +1456,41 @@ function esc(s){
   return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
 }
 
+function startLive(){
+  if(eventSource) eventSource.close();
+  eventSource=new EventSource("/api/events");
+
+  eventSource.onopen=()=>{
+    $("#lastUpdate").textContent="LIVE";
+  };
+
+  eventSource.onmessage=e=>{
+    try{
+      render(JSON.parse(e.data),true);
+    }catch(_){}
+  };
+
+  eventSource.onerror=()=>{
+    $("#lastUpdate").textContent="RECONNECT";
+  };
+}
+
 $$(".input-btn").forEach(btn=>btn.addEventListener("click",async()=>{
   if(busy)return;
   const n=Number(btn.dataset.input);
-
-  // Invalidate any status request that started before this tap.
-  statusEpoch++;
-
-  // Optimistic UI: highlight the requested input immediately, before
-  // waiting for the serial command to get the lock / reach the SW411.
   pendingInput=n;
   pendingInputUntil=Date.now()+4000;
   current={...current,input:n};
-  render(current);
+  render(current,false);
 
   setBusy(true);
   try{
-    await api(`/api/input/${n}`,{method:"POST"});
-    toast(`HDMI ${n} выбран`);
+    const r=await api(`/api/input/${n}`,{method:"POST"});
+    toast(`${r.name||("HDMI "+n)} выбран`);
     loadLogs();
-
-    // Confirm the real state after the hardware has had time to switch.
-    setTimeout(()=>refresh(true),550);
-    setTimeout(()=>refresh(true),1300);
   }catch(e){
     pendingInput=null;
     pendingInputUntil=0;
-    statusEpoch++;
     toast(e.message,true);
     refresh(true);
   }finally{
@@ -1478,51 +1500,107 @@ $$(".input-btn").forEach(btn=>btn.addEventListener("click",async()=>{
 
 $("#autoSwitch").addEventListener("click",async()=>{
   if(busy)return;
+  const enabled=current.auto_switch!==true;
+  current={...current,auto_switch:enabled};
+  render(current,false);
   setBusy(true);
   try{
-    const enabled=current.auto_switch!==true;
     await api("/api/auto",{method:"POST",body:JSON.stringify({enabled})});
-    current.auto_switch=enabled;
-    render(current);
     toast(enabled?"Автопереключение включено":"Ручной режим включён");
     loadLogs();
-    setTimeout(()=>refresh(true),350);
-  }catch(e){toast(e.message,true)}
-  finally{setBusy(false)}
+  }catch(e){
+    toast(e.message,true);
+    refresh(true);
+  }finally{
+    setBusy(false);
+  }
+});
+
+$("#earcSwitch").addEventListener("click",async()=>{
+  if(busy)return;
+  const enabled=current.earc!==true;
+  current={...current,earc:enabled};
+  render(current,false);
+  setBusy(true);
+  try{
+    await api("/api/earc",{method:"POST",body:JSON.stringify({enabled})});
+    toast(enabled?"eARC включён":"eARC выключен");
+    loadLogs();
+  }catch(e){
+    toast(e.message,true);
+    refresh(true);
+  }finally{
+    setBusy(false);
+  }
 });
 
 $("#powerBtn").addEventListener("click",async()=>{
   if(busy)return;
+  if(current.power===true && !confirm("Выключить SW411?")) return;
   setBusy(true);
   try{
-    await api("/api/power/toggle",{method:"POST"});
-    if(current.power!==null && current.power!==undefined) current.power=!current.power;
-    render(current);
-    toast("Команда питания выполнена");
+    const r=await api("/api/power/toggle",{method:"POST"});
+    current={...current,power:r.power};
+    render(current,false);
+    toast(r.power?"SW411 включается":"SW411 выключается");
     loadLogs();
-    setTimeout(()=>refresh(true),500);
-  }catch(e){toast(e.message,true)}
-  finally{setBusy(false)}
-});
-
-$("#rebootBtn").addEventListener("click",async()=>{
-  if(busy)return;
-  if(!confirm("Перезагрузить SW411?"))return;
-  setBusy(true);
-  try{
-    await api("/api/reboot",{method:"POST"});
-    toast("SW411 перезагружается…");
-    setTimeout(()=>refresh(true),1800);
-  }catch(e){toast(e.message,true)}
-  finally{setTimeout(()=>setBusy(false),900)}
+  }catch(e){
+    toast(e.message,true);
+    refresh(true);
+  }finally{
+    setBusy(false);
+  }
 });
 
 $("#refreshBtn").addEventListener("click",async()=>{
   if(busy)return;
   setBusy(true);
   await refresh(true);
+  await loadLogs();
   setBusy(false);
   toast("Статус обновлён");
+});
+
+function bindHold(btn, action, ms=1500){
+  let timer=null;
+  let fired=false;
+
+  const cancel=()=>{
+    if(timer) clearTimeout(timer);
+    timer=null;
+    btn.classList.remove("holding");
+  };
+
+  btn.addEventListener("pointerdown",e=>{
+    if(busy)return;
+    e.preventDefault();
+    fired=false;
+    btn.classList.add("holding");
+    timer=setTimeout(async()=>{
+      timer=null;
+      fired=true;
+      btn.classList.remove("holding");
+      await action();
+    },ms);
+  });
+
+  ["pointerup","pointerleave","pointercancel"].forEach(ev=>btn.addEventListener(ev,()=>{
+    if(!fired)cancel();
+  }));
+  btn.addEventListener("contextmenu",e=>e.preventDefault());
+}
+
+bindHold($("#rebootBtn"),async()=>{
+  setBusy(true);
+  try{
+    await api("/api/reboot",{method:"POST"});
+    toast("SW411 перезагружается…");
+    loadLogs();
+  }catch(e){
+    toast(e.message,true);
+  }finally{
+    setTimeout(()=>setBusy(false),900);
+  }
 });
 
 async function loadAppInfo(){
@@ -1536,12 +1614,12 @@ async function loadAppInfo(){
   }
 }
 
-$("#moreBtn").addEventListener("click",(e)=>{
+$("#moreBtn").addEventListener("click",e=>{
   e.stopPropagation();
   const open=!$("#moreMenu").classList.contains("open");
   $("#moreMenu").classList.toggle("open",open);
   $("#moreBtn").setAttribute("aria-expanded",open?"true":"false");
-  if(open) loadAppInfo();
+  if(open)loadAppInfo();
 });
 
 $("#moreMenu").addEventListener("click",e=>e.stopPropagation());
@@ -1551,12 +1629,9 @@ document.addEventListener("click",()=>{
   $("#moreBtn").setAttribute("aria-expanded","false");
 });
 
-$("#updateControlBtn").addEventListener("click",async()=>{
-  if(busy)return;
+async function updateControl(){
   $("#moreMenu").classList.remove("open");
   $("#moreBtn").setAttribute("aria-expanded","false");
-
-  if(!confirm("Обновить SW411 Control до актуальной версии из GitHub?")) return;
 
   const before=(await loadAppInfo())?.version||null;
   setBusy(true);
@@ -1569,35 +1644,134 @@ $("#updateControlBtn").addEventListener("click",async()=>{
     return;
   }
 
+  if(eventSource){
+    eventSource.close();
+    eventSource=null;
+  }
+
   let attempts=0;
   const check=async()=>{
     attempts++;
     try{
       const info=await api("/api/app");
-      if(info?.version){
+      if(info?.version && attempts>2){
         $("#appVersion").textContent="v"+info.version;
-        if(attempts>2){
-          setBusy(false);
-          toast(before && info.version!==before ? `Обновлено до v${info.version}` : "SW411 Control обновлён");
-          setTimeout(()=>location.reload(),900);
-          return;
-        }
+        setBusy(false);
+        toast(before && info.version!==before?`Обновлено до v${info.version}`:"SW411 Control обновлён");
+        setTimeout(()=>location.reload(),900);
+        return;
       }
     }catch(_){}
 
-    if(attempts<30){
-      setTimeout(check,1000);
-    }else{
+    if(attempts<40)setTimeout(check,1000);
+    else{
       setBusy(false);
-      toast("Обновление выполняется. Обнови страницу через несколько секунд.");
+      toast("Обновление ещё выполняется. Обнови страницу через несколько секунд.");
     }
   };
   setTimeout(check,1200);
+}
+
+bindHold($("#updateControlBtn"),updateControl,1500);
+
+async function openSettings(){
+  $("#moreMenu").classList.remove("open");
+  $("#moreBtn").setAttribute("aria-expanded","false");
+  try{
+    const cfg=await api("/api/settings");
+    const names=cfg.input_names||["HDMI 1","HDMI 2","HDMI 3","HDMI 4"];
+    [1,2,3,4].forEach((n,i)=>$("#name"+n).value=names[i]||`HDMI ${n}`);
+    $("#apiToken").value=cfg.api_token||"";
+
+    const m=cfg.mqtt||{};
+    $("#mqttEnabled").checked=!!m.enabled;
+    $("#mqttHost").value=m.host||"";
+    $("#mqttPort").value=m.port||1883;
+    $("#mqttUser").value=m.username||"";
+    $("#mqttPass").value="";
+    $("#mqttTopic").value=m.base_topic||"sw411";
+    $("#mqttDiscovery").value=m.discovery_prefix||"homeassistant";
+    $("#mqttState").textContent=m.enabled?(m.connected?"MQTT подключён":"MQTT включён, соединения пока нет"):"MQTT выключен";
+
+    $("#settingsModal").classList.add("open");
+  }catch(e){
+    toast(e.message,true);
+  }
+}
+
+function closeSettings(){
+  $("#settingsModal").classList.remove("open");
+}
+
+$("#settingsBtn").addEventListener("click",openSettings);
+$("#closeSettingsBtn").addEventListener("click",closeSettings);
+$("#cancelSettingsBtn").addEventListener("click",closeSettings);
+$("#settingsModal").addEventListener("click",e=>{
+  if(e.target===$("#settingsModal"))closeSettings();
 });
+
+$("#copyTokenBtn").addEventListener("click",async()=>{
+  try{
+    await navigator.clipboard.writeText($("#apiToken").value);
+    toast("API token скопирован");
+  }catch(_){
+    $("#apiToken").select();
+    document.execCommand("copy");
+    toast("API token скопирован");
+  }
+});
+
+$("#saveSettingsBtn").addEventListener("click",async()=>{
+  const payload={
+    input_names:[1,2,3,4].map(n=>$("#name"+n).value.trim()||`HDMI ${n}`),
+    mqtt:{
+      enabled:$("#mqttEnabled").checked,
+      host:$("#mqttHost").value.trim(),
+      port:Number($("#mqttPort").value)||1883,
+      username:$("#mqttUser").value.trim(),
+      password:$("#mqttPass").value,
+      base_topic:$("#mqttTopic").value.trim()||"sw411",
+      discovery_prefix:$("#mqttDiscovery").value.trim()||"homeassistant"
+    }
+  };
+
+  setBusy(true);
+  try{
+    const cfg=await api("/api/settings",{method:"PUT",body:JSON.stringify(payload)});
+    current={...current,input_names:cfg.input_names};
+    render(current,false);
+    closeSettings();
+    toast("Настройки сохранены");
+  }catch(e){
+    toast(e.message,true);
+  }finally{
+    setBusy(false);
+  }
+});
+
+window.addEventListener("beforeinstallprompt",e=>{
+  e.preventDefault();
+  deferredInstallPrompt=e;
+  $("#installPwaBtn").style.display="";
+});
+
+$("#installPwaBtn").addEventListener("click",async()=>{
+  $("#moreMenu").classList.remove("open");
+  if(!deferredInstallPrompt)return;
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt=null;
+  $("#installPwaBtn").style.display="none";
+});
+
+if("serviceWorker" in navigator){
+  window.addEventListener("load",()=>navigator.serviceWorker.register("/sw.js").catch(()=>{}));
+}
 
 loadAppInfo();
 refresh(true);
-setInterval(()=>{if(!busy && document.visibilityState==="visible")refresh(false)},2000);
+loadLogs();
+startLive();
 </script>
 </body>
 </html>
