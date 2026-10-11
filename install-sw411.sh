@@ -1899,7 +1899,7 @@ write_status running "$TARGET_VERSION"
 /bin/bash "$TMP"
 
 write_status success "$TARGET_VERSION"
-UPDATERUPDATER
+UPDATER
 chmod 0755 /usr/local/sbin/sw411-control-update
 
 cat > /etc/systemd/system/sw411-update.service <<'UPDATEUNIT'
