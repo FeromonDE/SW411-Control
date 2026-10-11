@@ -35,7 +35,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var webView: WebView
     private lateinit var errorPanel: LinearLayout
     private lateinit var errorText: TextView
-    private lateinit var progress: ProgressBar
+    private lateinit var loadingProgress: ProgressBar
     private var pageFailed = false
     private val shellScript by lazy {
         assets.open("android-shell.js").bufferedReader().use { it.readText() }
@@ -85,8 +85,8 @@ class MainActivity : ComponentActivity() {
                 }
 
                 override fun onProgressChanged(view: WebView, value: Int) {
-                    progress.progress = value
-                    progress.visibility = if (value < 100 && !pageFailed) View.VISIBLE else View.GONE
+                    loadingProgress.progress = value
+                    loadingProgress.visibility = if (value < 100 && !pageFailed) View.VISIBLE else View.GONE
                 }
             }
             webViewClient = object : WebViewClient() {
@@ -113,7 +113,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 override fun onPageFinished(view: WebView, url: String) {
-                    progress.visibility = View.GONE
+                    loadingProgress.visibility = View.GONE
                     if (!pageFailed && isControllerUrl(url)) view.evaluateJavascript(shellScript, null)
                 }
 
@@ -149,8 +149,8 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { showServerDialog() }
         })
         root.addView(errorPanel, FrameLayout.LayoutParams(-1, -1))
-        progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal)
-        root.addView(progress, FrameLayout.LayoutParams(-1, dp(3), Gravity.TOP))
+        loadingProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal)
+        root.addView(loadingProgress, FrameLayout.LayoutParams(-1, dp(3), Gravity.TOP))
         setContentView(root)
         root.requestApplyInsets()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -179,7 +179,7 @@ class MainActivity : ComponentActivity() {
 
     private fun showError(message: String) {
         pageFailed = true
-        progress.visibility = View.GONE
+        loadingProgress.visibility = View.GONE
         errorText.text = "$message\n\n$serverUrl\n\nПроверь подключение к домашней сети и работу SW411 Control."
         errorPanel.visibility = View.VISIBLE
     }
