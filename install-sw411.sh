@@ -19,7 +19,7 @@ usermod -aG dialout sw411
 
 install -d -m 0755 /opt/sw411/templates
 
-cat > /opt/sw411/app.py <<'PYAPP'
+cat > /opt/sw411/app.py.new <<'PYAPP'
 #!/usr/bin/env python3
 import os
 import re
@@ -874,9 +874,11 @@ if __name__ == "__main__":
     app.run(host="127.0.0.1", port=8787, threaded=True)
 
 PYAPP
+python3 -m py_compile /opt/sw411/app.py.new
+mv -f /opt/sw411/app.py.new /opt/sw411/app.py
 chmod 0755 /opt/sw411/app.py
 
-cat > /opt/sw411/templates/index.html <<'HTML'
+cat > /opt/sw411/templates/index.html.new <<'HTML'
 <!doctype html>
 <html lang="ru">
 <head>
@@ -1777,6 +1779,7 @@ startLive();
 </html>
 
 HTML
+mv -f /opt/sw411/templates/index.html.new /opt/sw411/templates/index.html
 chmod 0644 /opt/sw411/templates/index.html
 
 cat > /etc/udev/rules.d/99-sw411.rules <<'UDEV'
