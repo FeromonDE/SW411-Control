@@ -885,6 +885,9 @@ cat > /opt/sw411/templates/index.html <<'HTML'
   <meta name="theme-color" content="#081018">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="mobile-web-app-capable" content="yes">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <title>SW411 Control</title>
   <style>
     :root{
@@ -1055,6 +1058,54 @@ cat > /opt/sw411/templates/index.html <<'HTML'
     .badge{
       padding:6px 10px;border-radius:999px;background:#1b2835;color:#91a3b8;font-weight:700;font-size:11px
     }
+    .live-badge{display:inline-flex;align-items:center;gap:6px}
+    .live-badge:before{content:"";width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green)}
+    .audio-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;padding:13px 14px 15px}
+    .audio-opt{
+      border:1px solid var(--line);border-radius:13px;padding:10px 4px;
+      background:rgba(13,24,34,.72);color:#8292a6;font-weight:800;font-size:12px
+    }
+    .audio-opt:disabled{opacity:.6}
+    .audio-note{padding:0 14px 13px;color:var(--muted);font-size:11px;line-height:1.4}
+    .modal{
+      position:fixed;inset:0;z-index:60;display:none;align-items:flex-end;justify-content:center;
+      padding:12px;background:rgba(0,0,0,.58);backdrop-filter:blur(7px)
+    }
+    .modal.open{display:flex}
+    .sheet{
+      width:min(100%,620px);max-height:88svh;overflow:auto;border-radius:24px;
+      border:1px solid var(--line);background:#0c1722;box-shadow:0 28px 90px rgba(0,0,0,.58);
+      padding:18px
+    }
+    .sheet-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:15px}
+    .sheet-head h3{margin:0;font-size:21px}
+    .icon-btn{border:0;background:#1a2836;color:#d5deea;width:38px;height:38px;border-radius:12px;font-size:22px}
+    .form-section{padding:15px 0;border-top:1px solid var(--line)}
+    .form-section:first-of-type{border-top:0;padding-top:0}
+    .form-title{font-weight:800;margin-bottom:10px}
+    .field-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .field{display:flex;flex-direction:column;gap:5px}
+    .field.full{grid-column:1/-1}
+    .field label{font-size:11px;color:var(--muted)}
+    .field input{
+      width:100%;border:1px solid var(--line);border-radius:12px;background:#101e2b;color:var(--text);
+      padding:11px 12px;outline:none;font:inherit
+    }
+    .field input:focus{border-color:rgba(34,211,238,.55)}
+    .check-row{display:flex;align-items:center;gap:10px;margin:5px 0 12px}
+    .check-row input{width:19px;height:19px}
+    .sheet-actions{display:flex;gap:10px;position:sticky;bottom:-18px;padding:12px 0 2px;background:#0c1722}
+    .sheet-actions button{flex:1;border:0;border-radius:14px;padding:12px;font-weight:800}
+    .save-btn{background:linear-gradient(90deg,var(--cyan2),var(--cyan));color:#03232a}
+    .cancel-btn{background:#1b2936;color:#c9d4df}
+    .token-row{display:flex;gap:8px}
+    .token-row input{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px}
+    .copy-btn{border:1px solid var(--line);background:#1a2937;color:#dbe7f3;border-radius:12px;padding:0 12px}
+    .hold-protected{position:relative;overflow:hidden}
+    .hold-protected:after{
+      content:"";position:absolute;left:0;bottom:0;height:3px;width:0;background:var(--red)
+    }
+    .hold-protected.holding:after{width:100%;transition:width 1.5s linear}
     .logs{padding:4px 14px}
     .log{
       display:grid;grid-template-columns:10px 62px 1fr;align-items:start;gap:10px;
@@ -1109,9 +1160,17 @@ cat > /opt/sw411/templates/index.html <<'HTML'
       </button>
       <div class="more-menu" id="moreMenu">
         <div class="menu-title">SW411 Control <span id="appVersion">v—</span></div>
-        <button class="menu-action" id="updateControlBtn">
+        <button class="menu-action" id="settingsBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.8 1.8 0 0 0 .36 2l.06.06-2.12 2.12-.06-.06a1.8 1.8 0 0 0-2-.36 1.8 1.8 0 0 0-1.1 1.65V20.5h-3v-.09A1.8 1.8 0 0 0 10.4 18.8a1.8 1.8 0 0 0-2 .36l-.06.06-2.12-2.12.06-.06a1.8 1.8 0 0 0 .36-2A1.8 1.8 0 0 0 5 13.9H4.9v-3H5A1.8 1.8 0 0 0 6.6 9.8a1.8 1.8 0 0 0-.36-2l-.06-.06 2.12-2.12.06.06a1.8 1.8 0 0 0 2 .36A1.8 1.8 0 0 0 11.5 4.4V4.3h3v.1a1.8 1.8 0 0 0 1.1 1.64 1.8 1.8 0 0 0 2-.36l.06-.06 2.12 2.12-.06.06a1.8 1.8 0 0 0-.36 2A1.8 1.8 0 0 0 21 10.9h.1v3H21A1.8 1.8 0 0 0 19.4 15Z"/></svg>
+          <span><strong>Настройки</strong><small>Имена входов, MQTT, Home Assistant</small></span>
+        </button>
+        <button class="menu-action" id="installPwaBtn" style="display:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>
+          <span><strong>Установить приложение</strong><small>Добавить SW411 Control на главный экран</small></span>
+        </button>
+        <button class="menu-action hold-protected" id="updateControlBtn">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
-          <span><strong>Обновить из GitHub</strong><small>Установить актуальную версию</small></span>
+          <span><strong>Обновить из GitHub</strong><small>Удерживай 1,5 сек.</small></span>
         </button>
       </div>
     </div>
@@ -1140,7 +1199,7 @@ cat > /opt/sw411/templates/index.html <<'HTML'
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v10"/><path d="M6.4 5.6a8 8 0 1 0 11.2 0"/></svg>
         <span id="powerText">Питание</span>
       </button>
-      <button class="action danger" id="rebootBtn">
+      <button class="action danger hold-protected" id="rebootBtn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 11a8.1 8.1 0 1 0-2.4 5.7"/><path d="M20 4v7h-7"/></svg>
         <span>Перезагрузить</span>
       </button>
@@ -1156,19 +1215,19 @@ cat > /opt/sw411/templates/index.html <<'HTML'
     <div class="inputs">
       <button class="input-btn" data-input="1">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 8h14l2 3-4 5H7l-4-5 2-3Z"/><path d="M8 11h8"/></svg>
-        <span>HDMI 1</span><i class="tiny-dot"></i>
+        <span class="input-label">HDMI 1</span><i class="tiny-dot"></i>
       </button>
       <button class="input-btn" data-input="2">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 8h14l2 3-4 5H7l-4-5 2-3Z"/><path d="M8 11h8"/></svg>
-        <span>HDMI 2</span><i class="tiny-dot"></i>
+        <span class="input-label">HDMI 2</span><i class="tiny-dot"></i>
       </button>
       <button class="input-btn" data-input="3">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 8h14l2 3-4 5H7l-4-5 2-3Z"/><path d="M8 11h8"/></svg>
-        <span>HDMI 3</span><i class="tiny-dot"></i>
+        <span class="input-label">HDMI 3</span><i class="tiny-dot"></i>
       </button>
       <button class="input-btn" data-input="4">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 8h14l2 3-4 5H7l-4-5 2-3Z"/><path d="M8 11h8"/></svg>
-        <span>HDMI 4</span><i class="tiny-dot"></i>
+        <span class="input-label">HDMI 4</span><i class="tiny-dot"></i>
       </button>
     </div>
   </section>
@@ -1188,6 +1247,35 @@ cat > /opt/sw411/templates/index.html <<'HTML'
       </div>
       <div class="mode-row">
         <div class="mode-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h16v8H4z"/><path d="M8 12h8"/><path d="M12 5v3"/></svg>
+        </div>
+        <div class="mode-copy">
+          <strong>eARC / ARC</strong>
+          <small>Звук с телевизора и HDMI-CEC аудио</small>
+        </div>
+        <button class="switch" id="earcSwitch" aria-label="eARC"><i></i></button>
+      </div>
+      <div class="mode-row" style="display:block">
+        <div style="display:flex;align-items:center;gap:14px">
+          <div class="mode-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 9v6"/><path d="M8 6v12"/><path d="M12 4v16"/><path d="M16 7v10"/><path d="M20 10v4"/></svg>
+          </div>
+          <div class="mode-copy">
+            <strong>Audio EDID</strong>
+            <small>2.0 / 5.1 / 7.1 / PASS</small>
+          </div>
+          <span class="badge">USB CLI нет</span>
+        </div>
+        <div class="audio-grid">
+          <button class="audio-opt" disabled>2.0</button>
+          <button class="audio-opt" disabled>5.1</button>
+          <button class="audio-opt" disabled>7.1</button>
+          <button class="audio-opt" disabled>PASS</button>
+        </div>
+        <div class="audio-note">Прошивка SW411 не публикует команду Audio EDID в serial CLI. Я не отправляю непроверенные команды устройству.</div>
+      </div>
+      <div class="mode-row">
+        <div class="mode-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 12h14"/><path d="m9 8-4 4 4 4"/></svg>
         </div>
         <div class="mode-copy">
@@ -1200,12 +1288,62 @@ cat > /opt/sw411/templates/index.html <<'HTML'
   </section>
 
   <section class="section">
-    <div class="section-title"><h2>Системный журнал</h2><small id="lastUpdate">—</small></div>
+    <div class="section-title"><h2>Системный журнал</h2><small class="live-badge" id="lastUpdate">LIVE</small></div>
     <div class="panel logs" id="logs">
       <div class="log"><i class="log-dot"></i><span class="log-time">—</span><span class="log-message">Журнал пока пуст</span></div>
     </div>
   </section>
 </main>
+
+<div class="modal" id="settingsModal">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h3>Настройки</h3>
+      <button class="icon-btn" id="closeSettingsBtn" aria-label="Закрыть">×</button>
+    </div>
+
+    <div class="form-section">
+      <div class="form-title">Имена входов</div>
+      <div class="field-grid">
+        <div class="field"><label>HDMI 1</label><input id="name1" maxlength="32"></div>
+        <div class="field"><label>HDMI 2</label><input id="name2" maxlength="32"></div>
+        <div class="field"><label>HDMI 3</label><input id="name3" maxlength="32"></div>
+        <div class="field"><label>HDMI 4</label><input id="name4" maxlength="32"></div>
+      </div>
+    </div>
+
+    <div class="form-section">
+      <div class="form-title">Home Assistant REST API</div>
+      <div class="field full">
+        <label>Bearer token</label>
+        <div class="token-row">
+          <input id="apiToken" readonly>
+          <button class="copy-btn" id="copyTokenBtn" type="button">Копировать</button>
+        </div>
+      </div>
+      <div class="audio-note" style="padding:8px 0 0">Состояние: GET /api/ha/state · Заголовок Authorization: Bearer TOKEN</div>
+    </div>
+
+    <div class="form-section">
+      <div class="form-title">MQTT + Home Assistant Discovery</div>
+      <label class="check-row"><input type="checkbox" id="mqttEnabled"> Включить MQTT</label>
+      <div class="field-grid">
+        <div class="field full"><label>MQTT broker</label><input id="mqttHost" placeholder="192.168.2.x"></div>
+        <div class="field"><label>Порт</label><input id="mqttPort" type="number" value="1883"></div>
+        <div class="field"><label>Пользователь</label><input id="mqttUser"></div>
+        <div class="field full"><label>Пароль (пусто = не менять)</label><input id="mqttPass" type="password"></div>
+        <div class="field"><label>Base topic</label><input id="mqttTopic" value="sw411"></div>
+        <div class="field"><label>Discovery prefix</label><input id="mqttDiscovery" value="homeassistant"></div>
+      </div>
+      <div class="audio-note" id="mqttState" style="padding:8px 0 0">MQTT выключен</div>
+    </div>
+
+    <div class="sheet-actions">
+      <button class="cancel-btn" id="cancelSettingsBtn">Отмена</button>
+      <button class="save-btn" id="saveSettingsBtn">Сохранить</button>
+    </div>
+  </div>
+</div>
 
 <div class="toast-wrap"><div class="toast" id="toast"></div></div>
 
