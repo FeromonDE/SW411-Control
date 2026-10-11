@@ -147,22 +147,6 @@ internal fun NativePanel(vm: MainViewModel) {
                             WebSwitch("eARC", ui.status.earc == true, canControl, vm::setEarc)
                         }
                         WebDivider()
-                        Column(Modifier.padding(horizontal = 16.dp, vertical = 17.dp)) {
-                            ModeCopy(R.drawable.web_audio, "Audio EDID", "2.0 / 5.1 / 7.1 / PASS") { WebBadge("USB CLI нет") }
-                            Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 13.dp, bottom = 15.dp),
-                                horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                                listOf("2.0", "5.1", "7.1", "PASS").forEach { text ->
-                                    Box(Modifier.weight(1f).clip(RoundedCornerShape(13.dp)).border(1.dp, Line, RoundedCornerShape(13.dp))
-                                        .background(Color(0xB80D1822)).padding(horizontal = 4.dp, vertical = 10.dp).alpha(.6f),
-                                        contentAlignment = Alignment.Center) {
-                                        Text(text, color = Color(0xFF8292A6), fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
-                                    }
-                                }
-                            }
-                            Text("Прошивка SW411 не публикует команду Audio EDID в serial CLI. Я не отправляю непроверенные команды устройству.",
-                                color = Muted, fontSize = 11.sp, lineHeight = 15.4.sp,
-                                modifier = Modifier.padding(horizontal = 14.dp).padding(bottom = 13.dp))
-                        }
                         WebDivider()
                         ModeRow(R.drawable.web_manual, "Ручной режим", "Активен, когда автопереключение выключено") {
                             WebBadge(when (ui.status.autoSwitch) { true -> "ВЫКЛ"; false -> "ВКЛ"; null -> "—" })
