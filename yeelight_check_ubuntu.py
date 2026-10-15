@@ -82,23 +82,30 @@ def discover(seconds=5):
 
 
 def props(ip):
-    request = b'{"id":1,"method":"get_prop","params":["power","save_state","lan_ctrl","name"]}\r\n'
-    with socket.create_connection((ip, 55443), timeout=2.5) as conn:
-        conn.settimeout(2.5)
-        conn.sendall(request)
-        buffer = bytearray()
-        while b'\n' not in buffer and len(buffer) < 8192:
-            part = conn.recv(4096)
-            if not part:
-                break
-            buffer.extend(part)
-    data = json.loads(bytes(buffer).split(b'\n', 1)[0].strip())
-    result = data.get('result')
-    if isinstance(result, list) and len(result) >= 3:
-        return [str(x) for x in (result + [""])[:4]]
-    return ['ERR', str(data.get('error', 'Bad reply')), '-', '']
-
-
+    """Read only 3 properties and retry short-lived Yeelight TCP timeouts."""
+    request = b'{"id":1,"method":"get_prop","params":["power","save_state","lan_ctrl"]}\r\n'
+    last_error = None
+    for attempt in range(3):
+        try:
+            with socket.create_connection((ip, 55443), timeout=3.0) as conn:
+                conn.settimeout(3.0)
+                conn.sendall(request)
+                buffer = bytearray()
+                while b'\n' not in buffer and len(buffer) < 8192:
+                    part = conn.recv(4096)
+                    if not part:
+                        break
+                    buffer.extend(part)
+            data = json.loads(bytes(buffer).split(b'\n', 1)[0].strip())
+            result = data.get('result')
+            if isinstance(result, list) and len(result) >= 3:
+                return [str(x) for x in result[:3]] + ['']
+            return ['ERR', str(data.get('error', 'Bad reply')), '-', '']
+        except (OSError, ValueError) as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(0.5)
+    raise OSError(f'3 попытки: {last_error}')
 
 def scan_subnet(network):
     """Detect Yeelight LAN TCP responders, even when SSDP is blocked."""
@@ -142,9 +149,18 @@ def display_name(raw):
 
 def main():
     parser = argparse.ArgumentParser(description='Read Yeelight power/save_state over LAN')
+    parser.add_argument('--ip', help='Опросить только один IP, без сканирования')
     parser.add_argument('--subnet', default='192.168.2.0/24',
                         help='IPv4 subnet to scan (default 192.168.2.0/24)')
     args = parser.parse_args()
+    if args.ip:
+        ip = str(ipaddress.IPv4Address(args.ip))
+        try:
+            power, saved, lan, _ = props(ip)
+            print(f'{ip}: power={power}, save_state={saved}, lan_ctrl={lan}')
+        except OSError as exc:
+            print(f'{ip}: ERROR {exc}')
+        return
     network = ipaddress.IPv4Network(args.subnet, strict=False)
     if network.num_addresses > 1024:
         parser.error('Укажи подсеть не шире /22')
