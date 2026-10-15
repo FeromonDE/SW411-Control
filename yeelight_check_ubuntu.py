@@ -6,7 +6,6 @@ import time
 import ipaddress
 import concurrent.futures
 import argparse
-import base64
 
 # Exact Yeelight device IDs and names from the supplied HA device/entity registries.
 LAMPS = {
@@ -81,9 +80,9 @@ def discover(seconds=5):
     return found
 
 
-def props(ip):
-    """Read only 3 properties and retry short-lived Yeelight TCP timeouts."""
-    request = b'{"id":1,"method":"get_prop","params":["power","save_state","lan_ctrl","init_power_opt"]}\r\n'
+def read_init_power_opt(ip):
+    """Only read Yeelight boot-power setting. Never modify the lamp."""
+    request = b'{"id":1,"method":"get_prop","params":["init_power_opt"]}\r\n'
     last_error = None
     for attempt in range(3):
         try:
@@ -96,16 +95,22 @@ def props(ip):
                     if not part:
                         break
                     buffer.extend(part)
-            data = json.loads(bytes(buffer).split(b'\n', 1)[0].strip())
-            result = data.get('result')
-            if isinstance(result, list) and len(result) >= 3:
-                return [str(x) for x in (result + [''])[:4]]
-            return ['ERR', str(data.get('error', 'Bad reply')), '-', '']
+            response = json.loads(bytes(buffer).split(b'\n', 1)[0].strip())
+            if 'error' in response:
+                return 'ERROR: ' + str(response['error'])
+            result = response.get('result')
+            if not isinstance(result, list) or len(result) != 1:
+                return 'ERROR: invalid result'
+            value = result[0]
+            if value is None or value == '' or value == 'null':
+                return 'n/a'
+            return str(value)
         except (OSError, ValueError) as exc:
             last_error = exc
             if attempt < 2:
                 time.sleep(0.5)
-    raise OSError(f'3 попытки: {last_error}')
+    return f'ERROR: {last_error}'
+
 
 def scan_subnet(network):
     """Detect Yeelight LAN TCP responders, even when SSDP is blocked."""
@@ -135,82 +140,76 @@ def arp_entries():
     return result
 
 
-def display_name(raw):
-    if not raw or raw in ('0', 'None', 'null'):
-        return ''
-    try:
-        name = base64.b64decode(raw, validate=True).decode('utf-8')
-        if name.strip() and name.isprintable():
-            return name.strip()
-    except (ValueError, UnicodeError):
-        pass
-    return raw if raw.isprintable() else ''
-
-
 def main():
-    parser = argparse.ArgumentParser(description='Read Yeelight power/save_state over LAN')
-    parser.add_argument('--ip', help='Опросить только один IP, без сканирования')
+    parser = argparse.ArgumentParser(
+        description='Read init_power_opt on Yeelight lamps (no desk lamps; read-only)'
+    )
+    parser.add_argument('--ip', help='Read a single IP without discovery')
     parser.add_argument('--subnet', default='192.168.2.0/24',
-                        help='IPv4 subnet to scan (default 192.168.2.0/24)')
+                        help='IPv4 subnet to scan (default: 192.168.2.0/24)')
     args = parser.parse_args()
     if args.ip:
         ip = str(ipaddress.IPv4Address(args.ip))
-        try:
-            power, saved, lan, init = props(ip)
-            print(f'{ip}: power={power}, save_state={saved}, lan_ctrl={lan}, init_power_opt={init}')
-        except OSError as exc:
-            print(f'{ip}: ERROR {exc}')
+        print(f'{ip}: init_power_opt={read_init_power_opt(ip)}')
         return
+
     network = ipaddress.IPv4Network(args.subnet, strict=False)
     if network.num_addresses > 1024:
-        parser.error('Укажи подсеть не шире /22')
+        parser.error('Subnet must be /22 or smaller')
 
-    print(f'Сканирование {network}: TCP 55443 ...', flush=True)
+    # A desk lamp is intentionally excluded, including from parameter reads.
+    excluded_ids = {0x102FEF6C}
+    targets = {device_id: name for device_id, name in LAMPS.items()
+               if device_id not in excluded_ids}
+    print(f'Поиск Yeelight в {network} (TCP 55443)...', flush=True)
     reachable = scan_subnet(network)
     if not reachable:
-        print('На TCP 55443 нет доступных ламп. Проверь подсеть и LAN Control.')
+        print('Доступных устройств нет; проверь сеть и LAN Control.')
         return
 
-    print(f'Доступных TCP адресов: {len(reachable)}. Определяю названия ...', flush=True)
-    discovered_by_ip = {ip: id_ for id_, ip in discover(3).items()}
+    discovered_by_ip = {ip: device_id for device_id, ip in discover(3).items()}
     neighbor_macs = arp_entries()
-    found_names = set()
-    unknown_count = 0
+    results = {}
+    other = 0
 
-    print(f'{"Лампа":27} {"IP":16} {"Power":7} {"Save":5} {"LAN":5} {"Init":6} Способ')
-    print('-' * 94)
     for ip in reachable:
-        known_id = discovered_by_ip.get(ip)
-        source = 'ID' if known_id in LAMPS else 'MAC'
-        if known_id not in LAMPS:
-            known_id = ID_BY_MAC.get(neighbor_macs.get(ip, ''))
-        try:
-            power, saved, lan, init = props(ip)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            power, saved, lan, init = 'ERROR', '-', '-', '-'
-            error_info = str(exc)[:50]
-        else:
-            error_info = ''
+        device_id = discovered_by_ip.get(ip)
+        if device_id not in LAMPS:
+            device_id = ID_BY_MAC.get(neighbor_macs.get(ip, ''))
+        if device_id in excluded_ids:
+            continue
+        if device_id not in targets:
+            other += 1
+            continue
+        results[device_id] = (ip, read_init_power_opt(ip))
 
-        name = LAMPS.get(known_id)
-        if name:
-            found_names.add(name)
+    print(f'\n{"Лампа":26} {"IP":16} {"init_power_opt":17} Результат')
+    print('-' * 79)
+    ok = enabled = errors = missing = 0
+    for device_id, name in targets.items():
+        entry = results.get(device_id)
+        if entry is None:
+            missing += 1
+            print(f'{name:26} {"—":16} {"—":17} Не найдена')
+            continue
+        ip, value = entry
+        if value == '2':
+            ok += 1
+            label = 'Запрет включения'
+        elif value == '1':
+            enabled += 1
+            label = 'Автовключение!'
         else:
-            unknown_count += 1
-            name = f'Yeelight ({ip})'
-            source = 'IP/Name'
-        print(f'{name[:27]:27} {ip:16} {power:7} {saved:5} {lan:5} {init:6} {source}'
-              + (f' {error_info}' if error_info else ''))
+            errors += 1
+            label = 'Не удалось прочитать' if value.startswith('ERROR') else 'Не поддерживается'
+        print(f'{name:26} {ip:16} {value[:17]:17} {label}')
 
-    print(f'\nTCP найдено: {len(reachable)}; по реестрам сопоставлено: '
-          f'{len(found_names)}/{len(LAMPS)}; неопознано: {unknown_count}')
-    if len(found_names) != len(LAMPS):
-        print('Без подтверждённого соответствия IP (могут быть среди неопознанных):')
-        print(', '.join(name for name in LAMPS.values() if name not in found_names))
-    print('Save = автоматическое сохранение состояния (0 выкл., 1 вкл.),'
-          ' не настройка Auto on after power loss.')
-    print('Init = init_power_opt: 1 — автовключение, 2 — не включать (проверено для ceil29).')
-    print('Только чтение: скрипт ничего не изменяет.')
+    print(f'\nЗапрет (2): {ok}; Автовключение (1): {enabled}; '
+          f'нет значения: {errors}; не найдены: {missing}.')
+    if other:
+        print(f'Не сопоставлено с реестром: {other} устройство(а).')
+    print('Для ceil29 подтверждено: 1 = автоматическое включение, 2 = запрет.')
+    print('Настольные лампы исключены; отправляются только команды чтения.')
 
 
 if __name__ == '__main__':
