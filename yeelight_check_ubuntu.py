@@ -83,7 +83,7 @@ def discover(seconds=5):
 
 def props(ip):
     """Read only 3 properties and retry short-lived Yeelight TCP timeouts."""
-    request = b'{"id":1,"method":"get_prop","params":["power","save_state","lan_ctrl"]}\r\n'
+    request = b'{"id":1,"method":"get_prop","params":["power","save_state","lan_ctrl","init_power_opt"]}\r\n'
     last_error = None
     for attempt in range(3):
         try:
@@ -99,7 +99,7 @@ def props(ip):
             data = json.loads(bytes(buffer).split(b'\n', 1)[0].strip())
             result = data.get('result')
             if isinstance(result, list) and len(result) >= 3:
-                return [str(x) for x in result[:3]] + ['']
+                return [str(x) for x in (result + [''])[:4]]
             return ['ERR', str(data.get('error', 'Bad reply')), '-', '']
         except (OSError, ValueError) as exc:
             last_error = exc
@@ -156,8 +156,8 @@ def main():
     if args.ip:
         ip = str(ipaddress.IPv4Address(args.ip))
         try:
-            power, saved, lan, _ = props(ip)
-            print(f'{ip}: power={power}, save_state={saved}, lan_ctrl={lan}')
+            power, saved, lan, init = props(ip)
+            print(f'{ip}: power={power}, save_state={saved}, lan_ctrl={lan}, init_power_opt={init}')
         except OSError as exc:
             print(f'{ip}: ERROR {exc}')
         return
@@ -177,17 +177,17 @@ def main():
     found_names = set()
     unknown_count = 0
 
-    print(f'{"Лампа":27} {"IP":16} {"Power":8} {"Save":7} {"LAN":5} Способ')
-    print('-' * 88)
+    print(f'{"Лампа":27} {"IP":16} {"Power":7} {"Save":5} {"LAN":5} {"Init":6} Способ')
+    print('-' * 94)
     for ip in reachable:
         known_id = discovered_by_ip.get(ip)
         source = 'ID' if known_id in LAMPS else 'MAC'
         if known_id not in LAMPS:
             known_id = ID_BY_MAC.get(neighbor_macs.get(ip, ''))
         try:
-            power, saved, lan, raw_name = props(ip)
+            power, saved, lan, init = props(ip)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
-            power, saved, lan, raw_name = 'ERROR', '-', '-', ''
+            power, saved, lan, init = 'ERROR', '-', '-', '-'
             error_info = str(exc)[:50]
         else:
             error_info = ''
@@ -197,9 +197,9 @@ def main():
             found_names.add(name)
         else:
             unknown_count += 1
-            name = display_name(raw_name) or f'Yeelight ({ip})'
+            name = f'Yeelight ({ip})'
             source = 'IP/Name'
-        print(f'{name[:27]:27} {ip:16} {power:8} {saved:7} {lan:5} {source}'
+        print(f'{name[:27]:27} {ip:16} {power:7} {saved:5} {lan:5} {init:6} {source}'
               + (f' {error_info}' if error_info else ''))
 
     print(f'\nTCP найдено: {len(reachable)}; по реестрам сопоставлено: '
@@ -209,6 +209,7 @@ def main():
         print(', '.join(name for name in LAMPS.values() if name not in found_names))
     print('Save = автоматическое сохранение состояния (0 выкл., 1 вкл.),'
           ' не настройка Auto on after power loss.')
+    print('Init = init_power_opt: 1 — автовключение, 2 — не включать (проверено для ceil29).')
     print('Только чтение: скрипт ничего не изменяет.')
 
 
